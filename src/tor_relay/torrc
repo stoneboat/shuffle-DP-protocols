@@ -1,11 +1,12 @@
 # Custom Tor Configuration for shuffle-DP-protocols Project
 
+# Configuration for message-sending service
 # Listen for SOCKS connections on port 9050
 SocksPort 9050
 
 # Log notices to a file within the project directory
 Log notice file ./logs/tor_notices.log
 
-# Configure Hidden Service for Program B
+# Configure Hidden Service for Tor relay
 HiddenServiceDir ./hidden_relay_service/
-HiddenServicePort 5000 127.0.0.1:5000
+HiddenServicePort 9001 127.0.0.1:9001
