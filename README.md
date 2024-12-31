@@ -28,9 +28,10 @@ sudo systemctl enable tor
 sudo systemctl status tor
 ```
 
+
 ### Firewall Policies
 
-Ensure that the ports used by Tor are allowed for external access. In this example, the Tor relay uses ports 9050 and 9001 for listening and receiving, respectively. Similarly, the client uses ports 9051 and 9002. Configure firewall rules accordingly if you are using Google Cloud Virtual Machine Service:
+Ensure that the ports used by Tor are allowed for external access. In this example, the Tor relay uses ports 9051 and 9001 for listening and receiving, respectively. Similarly, the client uses ports 9052 and 9002. Configure firewall rules accordingly if you are using Google Cloud Virtual Machine Service:
 
 #### Open Ports in Google Cloud:
 ```bash
@@ -39,7 +40,7 @@ gcloud compute firewall-rules create allow-tor-ports \
   --priority=1000 \
   --network=default \
   --action=ALLOW \
-  --rules=tcp:9001,tcp:9050,tcp:9002,tcp:9051 \
+  --rules=tcp:9001,tcp:9051,tcp:9002,tcp:9052 \
   --source-ranges=0.0.0.0/0
 ```
 

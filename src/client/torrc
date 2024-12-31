@@ -1,8 +1,8 @@
 # Custom Tor Configuration for the client
 
 # Configuration for message-sending service
-# Listen for SOCKS connections on port 9051
-SocksPort 9051
+# Listen for SOCKS connections on port 9052
+SocksPort 9052
 
 # Log notices to a file within the project directory
 Log notice file ./logs/tor_client_notices.log

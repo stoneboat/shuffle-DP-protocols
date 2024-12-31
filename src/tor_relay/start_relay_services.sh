@@ -11,7 +11,7 @@ tor -f ./src/tor_relay/torrc & TOR_PID=$!
 echo "Started Tor with PID $TOR_PID"
 
 # Wait for Tor to initialize
-sleep 10
+sleep 6
 
 # Start tor relay (Flask server)
 python3 src/tor_relay/receive_message.py & RELAY_PID=$!

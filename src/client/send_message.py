@@ -1,14 +1,24 @@
 import requests
+import os
 
 # Configure Tor SOCKS proxy
 proxies = {
-    'http': 'socks5h://127.0.0.1:9050',
-    'https': 'socks5h://127.0.0.1:9050',
+    'http': 'socks5h://127.0.0.1:9051',
+    'https': 'socks5h://127.0.0.1:9051',
 }
 
-
-# Replace this with Program B's onion address
-TOR_ONION_ADDRESS = "zqusliokkkskzxbwo7uvhsbznf36nsfmk7cbfiqumljxego3yb5lq4ad.onion"
+project_dir = os.path.abspath(os.path.join(os.getcwd(), '..'))
+tor_relay_address_path = os.path.join(project_dir, 'hidden_relay_service/hostname')
+# Replace this with Toy relay's onion address, which is at hidden_relay_service hostname
+try:
+    # Open the file and read the Onion address
+    with open(tor_relay_address_path, 'r') as file:
+        TOR_ONION_ADDRESS = file.read().strip()  # Remove any leading/trailing whitespace
+        print(f"The Tor relay onion address has found: {onion_address}")
+except FileNotFoundError:
+    print(f"Error: Tor relay onion address does not exist in the default path.")
+except Exception as e:
+    print(f"An error occurred: {e}")
 
 def send_message(message):
     url = f"http://{TOR_ONION_ADDRESS}:9001/message"
