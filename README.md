@@ -86,6 +86,12 @@ This will show the URL for accessing the JupyterLab web service.
 
 ## Usage
 
+To switch to the test branch, run the following commands:
+
+```bash
+git checkout tor-relay-test
+```
+
 ### Tor Relay
 
 The Tor relay acts as an intermediary, receiving messages sent by the client and routing them locally. To start the relay:
