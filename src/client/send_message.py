@@ -20,6 +20,8 @@ except FileNotFoundError:
     print(f"Error: Tor relay onion address does not exist in the default path.")
 except Exception as e:
     print(f"An error occurred: {e}")
+    TOR_ONION_ADDRESS = None
+
 
 def send_message(message):
     url = f"http://{TOR_ONION_ADDRESS}:9001/message"
@@ -33,5 +35,52 @@ def send_message(message):
     except Exception as e:
         print(f"An error occurred: {e}")
 
+
+def generate_test_file(file_path, size_kb):
+    with open(file_path, 'w') as file:
+        text = "This is a line of readable text.\n"
+        while file.tell() < size_kb * 1024:
+            file.write(text)
+
+
+def send_file(file_path):
+    if not TOR_ONION_ADDRESS:
+        print("Tor relay onion address is not set.")
+        return
+
+    url = f"http://{TOR_ONION_ADDRESS}:9001/upload"
+    try:
+        with open(file_path, 'rb') as file:
+            files = {'file': file}
+            response = requests.post(url, files=files, proxies=proxies)
+        
+        if response.status_code == 200:
+            print("File sent successfully!")
+        else:
+            print(f"Failed to send file. Status Code: {response.status_code}")
+    except FileNotFoundError:
+        print("Error: File does not exist.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+        
 if __name__ == "__main__":
-    send_message("hello world")
+    if not TOR_ONION_ADDRESS:
+        print("Tor relay onion address is not set.")
+    else:
+        # Test for sending a message
+        send_message("hello world")
+    
+        # Test for sending a large file
+        test_file_path = os.path.join(project_dir, 'hidden_client/example_file.txt')
+        generate_test_file(test_file_path, 10)  # Generate a test file with approximately 10 KB size
+        send_file(test_file_path)
+
+
+
+
+
+
+
+
+    
