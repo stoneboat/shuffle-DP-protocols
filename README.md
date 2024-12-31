@@ -113,5 +113,19 @@ To send a test message from the client, open a new shell and run:
 
 - The client and Tor relay will set up separate Tor processes, each with different listening and receiving ports. Ensure that all such ports are free and clear for use. If you are using a cloud service like a virtual machine, make sure the firewall policies are configured to allow external access to these ports.
 - The Tor configuration file for the client is located at `src/client/torrc`, while the configuration file for the Tor relay is at `src/tor_relay/torrc`.
+- If you are using a deploy key to update the remote project, follow these steps to configure the proper credentials:
+
+```bash
+# Start the SSH agent
+eval "$(ssh-agent -s)"
+
+# Add the deploy key (replace `your_deploy_key` with your actual deploy key file name)
+ssh-add ~/.ssh/your_deploy_key
+
+# Set the correct Git remote URL (replace `USERNAME` and `REPOSITORY` with your GitHub account name and repository name, respectively)
+git remote set-url origin git@github.com:USERNAME/REPOSITORY.git
+```
+
+Ensure that you replace `your_deploy_key`, `USERNAME`, and `REPOSITORY` with your specific credentials and repository details.
 
 ---
