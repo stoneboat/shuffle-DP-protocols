@@ -51,7 +51,13 @@ To set up the environment, run the following commands:
 
 ```bash
 sudo apt update && sudo apt upgrade -y
-pip install --upgrade -r requirements.txt
+sudo apt install python3.10-venv
+git clone https://github.com/stoneboat/shuffle-DP-protocols.git
+python3 -m venv shuffleDP
+source shuffleDP/bin/activate
+sudo apt install python3-pip
+cd shuffle-DP-protocols
+pip3 install --upgrade -r requirements.txt
 ```
 
 
