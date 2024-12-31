@@ -2,11 +2,11 @@
 
 # Create the folders if they do not exist
 [ -d logs ] || mkdir -p logs
-[ -d hidden_relay_service ] || mkdir -p hidden_relay_service
-chmod -R 700 hidden_relay_service
+[ -d hidden_client ] || mkdir -p hidden_client
+chmod -R 700 hidden_client
 
-# Start Tor for tor relay with custom torrc
-tor -f ./src/tor_relay/torrc & TOR_PID=$!
+# Start Tor for client with custom torrc
+tor -f ./src/client/torrc & TOR_PID=$!
 
 echo "Started Tor with PID $TOR_PID"
 
@@ -14,13 +14,13 @@ echo "Started Tor with PID $TOR_PID"
 sleep 10
 
 # Start tor relay (Flask server)
-python3 src/tor_relay/receive_message.py & RELAY_PID=$!
+python3 src/client/send_message.py & CLIENT_PID=$!
 
-echo "Started Tor relay with PID $RELAY_PID"
+echo "Started test client with PID $CLIENT_PID"
 
 # Function to handle script termination
 cleanup() {
-    echo "Terminating Tor and Tor relay..."
+    echo "Terminating Tor and Client..."
     kill $TOR_PID
     kill $RELAY_PID
     exit 0

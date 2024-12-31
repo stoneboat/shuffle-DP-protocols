@@ -6,6 +6,47 @@ This branch tests the functionality of sending randomized encodings from a clien
 
 ## Installation
 
+### Tor Installation
+
+To install Tor on your system, use the following commands:
+
+#### Ubuntu/Debian-based Systems:
+```bash
+sudo apt update
+sudo apt install -y tor
+```
+
+#### Verify Tor Installation:
+```bash
+tor --version
+```
+
+Ensure that the Tor service is running correctly:
+```bash
+sudo systemctl start tor
+sudo systemctl enable tor
+sudo systemctl status tor
+```
+
+### Firewall Policies
+
+Ensure that the ports used by Tor are allowed for external access. In this example, the Tor relay uses ports 9050 and 9001 for listening and receiving, respectively. Similarly, the client uses ports 9051 and 9002. Configure firewall rules accordingly if you are using Google Cloud Virtual Machine Service:
+
+#### Open Ports in Google Cloud:
+```bash
+gcloud compute firewall-rules create allow-tor-ports \
+  --direction=INGRESS \
+  --priority=1000 \
+  --network=default \
+  --action=ALLOW \
+  --rules=tcp:9001,tcp:9050,tcp:9002,tcp:9051 \
+  --source-ranges=0.0.0.0/0
+```
+
+Ensure the specified ports are not blocked by any other firewall rules or policies.
+
+### Software Installation
+
 To set up the environment, run the following commands:
 
 ```bash
@@ -13,17 +54,30 @@ sudo apt update && sudo apt upgrade -y
 pip install --upgrade -r requirements.txt
 ```
 
+
+### Editor Configuration
+To edit the code, we recommend using JupyterLab. To configure it, use the following commands:
+
+#### Install JupyterLab:
+```bash
+pip install jupyterlab
+```
+
+#### Start JupyterLab:
+```bash
+jupyter lab
+```
+
+#### Display JupyterLab URLs:
+```bash
+jupyter lab list
+```
+
+This will show the URL for accessing the JupyterLab web service.
+
 ---
 
 ## Usage
-
-### Client
-
-To send a test message from the client, open a new shell and run:
-
-```bash
-python3 src/client/send_message.py
-```
 
 ### Tor Relay
 
@@ -40,8 +94,17 @@ This script performs two main actions:
 - **Start a Tor process**: It uses the configuration file located at `./src/tor_relay/torrc`. This file sets up a hidden service on port 9001 and routes incoming messages to the local port 9001.
 - **Start the Tor relay program**: The relay program listens on the configured local port (9001 in the example), receives messages, and processes them according to its functionality.
 
+### Client
+
+To send a test message from the client, open a new shell and run:
+
+```bash
+./src/client/start_client.sh
+```
+
 ### Notes
 
-- Ensure the Tor process uses unique listening and receiving ports as specified in the configuration file (`./src/tor_relay/torrc`) to avoid conflicts with other Tor instances running on the same machine.
+- The client and Tor relay will set up separate Tor processes, each with different listening and receiving ports. Ensure that all such ports are free and clear for use. If you are using a cloud service like a virtual machine, make sure the firewall policies are configured to allow external access to these ports.
+- The Tor configuration file for the client is located at `src/client/torrc`, while the configuration file for the Tor relay is at `src/tor_relay/torrc`.
 
 ---
