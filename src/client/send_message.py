@@ -7,14 +7,15 @@ proxies = {
     'https': 'socks5h://127.0.0.1:9051',
 }
 
-project_dir = os.path.abspath(os.path.join(os.getcwd(), '..'))
+project_dir = os.path.abspath(os.getcwd())
 tor_relay_address_path = os.path.join(project_dir, 'hidden_relay_service/hostname')
 # Replace this with Toy relay's onion address, which is at hidden_relay_service hostname
 try:
     # Open the file and read the Onion address
+    print(tor_relay_address_path)
     with open(tor_relay_address_path, 'r') as file:
         TOR_ONION_ADDRESS = file.read().strip()  # Remove any leading/trailing whitespace
-        print(f"The Tor relay onion address has found: {onion_address}")
+        print(f"The Tor relay onion address has found: {TOR_ONION_ADDRESS}")
 except FileNotFoundError:
     print(f"Error: Tor relay onion address does not exist in the default path.")
 except Exception as e:
