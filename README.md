@@ -1,6 +1,6 @@
 # About
 
-This branch tests the functionality of sending randomized encodings from a client to a blockchain miner via Tor. For this project, we focus solely on the Tor relay functionality of the miner, which we refer to as the "Tor relay."
+This branch focuses on testing the process of sending randomized encodings from a client to an Ethereum blockchain through Tor. The implementation leverages Brownie, a Python-based Ethereum development framework, and uses a local Ganache network to simulate both the client and the in-memory blockchain environment. 
 
 ---
 
@@ -48,18 +48,35 @@ Ensure the specified ports are not blocked by any other firewall rules or polici
 
 ### Software Installation
 
-To set up the environment, run the following commands:
+To download the code and set up the environment, use the following commands:
 
+#### Step 1: Update and Install Git
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install python3.10-venv
+sudo apt install git  # Install git if not already installed
+
 git clone https://github.com/stoneboat/shuffle-DP-protocols.git
-python3 -m venv shuffleDP
-source shuffleDP/bin/activate
-sudo apt install python3-pip
-cd shuffle-DP-protocols
-pip3 install --upgrade -r requirements.txt
 ```
+
+#### Step 2: Set Up the Python Environment
+
+1. **Install Python Virtual Environment Support**:
+    ```bash
+    sudo apt install python3.10-venv  # Check your Python version and install the corresponding venv package
+    sudo apt install python3-pip      # Install pip if not already installed
+    ```
+
+2. **Create and Activate a Virtual Environment**:
+    ```bash
+    python3 -m venv shuffleDP
+    source shuffleDP/bin/activate
+    ```
+
+3. **Navigate to the Project Directory and Install Dependencies**:
+    ```bash
+    cd shuffle-DP-protocols
+    pip install --upgrade -r requirements.txt
+    ```
 
 
 ### Editor Configuration
