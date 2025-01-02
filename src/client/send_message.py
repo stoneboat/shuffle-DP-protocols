@@ -23,13 +23,13 @@ except Exception as e:
     TOR_ONION_ADDRESS = None
 
 
-def send_message(message):
+def send_message(_id, _value):
     url = f"http://{TOR_ONION_ADDRESS}:9001/message"
-    payload = {'message': message}
+    payload = {'message': {'accountId': _id, 'value': _value}}
     try:
         response = requests.post(url, json=payload, proxies=proxies)
         if response.status_code == 200:
-            print("Message sent successfully!")
+            print(f"send message {payload}")
         else:
             print(f"Failed to send message. Status Code: {response.status_code}")
     except Exception as e:
@@ -69,12 +69,14 @@ if __name__ == "__main__":
         print("Tor relay onion address is not set.")
     else:
         # Test for sending a message
-        send_message("hello world")
+        size = 5
+        for i in range(5):
+            send_message(_id = i, _value=i)
     
-        # Test for sending a large file
-        test_file_path = os.path.join(project_dir, 'hidden_client/example_file.txt')
-        generate_test_file(test_file_path, 10)  # Generate a test file with approximately 10 KB size
-        send_file(test_file_path)
+        # # Test for sending a large file
+        # test_file_path = os.path.join(project_dir, 'hidden_client/example_file.txt')
+        # generate_test_file(test_file_path, 10)  # Generate a test file with approximately 10 KB size
+        # send_file(test_file_path)
 
 
 

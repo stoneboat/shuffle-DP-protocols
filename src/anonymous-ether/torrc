@@ -1,0 +1,12 @@
+# Custom Tor Configuration for the tor relay functionality
+
+# Configuration for message-sending service
+# Listen for SOCKS connections on port 9051
+SocksPort 9051
+
+# Log notices to a file within the project directory
+Log notice file ./logs/tor_relay_notices.log
+
+# Configure Hidden Service for Tor relay
+HiddenServiceDir ./hidden_relay_service/
+HiddenServicePort 9001 127.0.0.1:9001
