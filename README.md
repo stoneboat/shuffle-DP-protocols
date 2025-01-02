@@ -1,4 +1,3 @@
-```markdown
 # About
 
 This branch focuses on testing the process of sending randomized encodings from a client to an Ethereum blockchain through Tor. The implementation leverages Brownie, a Python-based Ethereum development framework, and uses a local Ganache network to simulate both the client and the in-memory blockchain environment.
@@ -11,8 +10,10 @@ The experiment is tested on a Google Virtual Machine instance with an Ubuntu 22.
 
 ### Update and Upgrade Your System
 First, ensure your system is up-to-date:
+
 ```bash
-sudo apt update && sudo apt upgrade -y
+sudo apt update
+sudo apt upgrade -y
 ```
 
 ### Dependencies Installation
