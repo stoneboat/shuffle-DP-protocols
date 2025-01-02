@@ -1,6 +1,0 @@
-networks:
-  default: eth-tester
-  local_tester:
-    provider: tester  # Specify eth-tester as the provider
-    cmd_settings:
-      port: 9055

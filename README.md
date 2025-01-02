@@ -127,6 +127,25 @@ This will show the URL for accessing the JupyterLab web service.
 
 ## Usage
 
+### Set Up Blockchain Network
+
+To set up a blockchain test network, follow these steps:
+
+1. Open a new shell and start the Ganache test network:
+
+   ```bash
+   ganache
+   ```
+
+2. Add the test network to Brownie:
+
+   ```bash
+   cd src/anonymous-ether
+   brownie networks add Ethereum ganache-local host=http://127.0.0.1:8545 chainid=1337
+   ```
+
+   Replace the `host` URL and `chainid` with the details of the test network you are using. In the provided batch scripts, the test network is referred to as `ganache-local`. If you use a different network name, update the scripts accordingly.
+
 ### Tor Relay
 The Tor relay acts as an intermediary, receiving messages sent by the client and routing them locally. To start the relay:
 
@@ -164,7 +183,4 @@ ssh-add ~/.ssh/your_deploy_key
 git remote set-url origin git@github.com:USERNAME/REPOSITORY.git
 ```
 Ensure you replace `your_deploy_key`, `USERNAME`, and `REPOSITORY` with your credentials and repository details.
-
----
-```
 
