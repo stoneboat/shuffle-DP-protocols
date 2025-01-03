@@ -38,3 +38,5 @@ def receive_message():
     
 def main():
     app.run(host='0.0.0.0', port=9001)
+
+    return storage_contract

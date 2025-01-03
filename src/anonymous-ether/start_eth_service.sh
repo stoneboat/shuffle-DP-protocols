@@ -6,7 +6,7 @@
 chmod -R 700 hidden_relay_service
 
 # Start Tor for tor relay with custom torrc
-tor -f ./src/tor_relay/torrc & TOR_PID=$!
+tor -f ./src/anonymous-ether/torrc & TOR_PID=$!
 
 echo "Started Tor with PID $TOR_PID"
 
@@ -18,12 +18,15 @@ cd src/anonymous-ether/ || exit
 
 # Use find to locate directories named .ipynb_checkpoints and remove them
 find . -type d -name ".ipynb_checkpoints" -exec rm -rf {} +
+# Clear compiled file
+[ -d build ] || mkdir -p build
+rm -r build/ & mkdir build
 
 brownie compile
 
-brownie run scripts/tor_are_int_test.py --network ganache-local & ARE_PID=$!
+brownie run scripts/tor_are_int_test.py --network ganache-local 
 
-echo "Started ARE simulation with PID $ARE_PID"
+# echo "Started ARE simulation with PID $ARE_PID"
 
 # Function to handle script termination
 cleanup() {
