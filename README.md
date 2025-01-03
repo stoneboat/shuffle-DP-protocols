@@ -88,7 +88,7 @@ git clone https://github.com/stoneboat/shuffle-DP-protocols.git
 #### Step 2: Set Up the Python Environment
 1. **Install Python Virtual Environment Support**:
    ```bash
-   sudo apt install python3.10-venv  # Ensure the correct version of Python
+   sudo apt install python3-venv  # Ensure the correct version of Python
    sudo apt install python3-pip      # Install pip if not already installed
    ```
 
