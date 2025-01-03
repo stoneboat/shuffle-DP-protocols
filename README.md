@@ -146,30 +146,35 @@ To set up a blockchain test network, follow these steps:
 
    Replace the `host` URL and `chainid` with the details of the test network you are using. In the provided batch scripts, the test network is referred to as `ganache-local`. If you use a different network name, update the scripts accordingly.
 
-### Tor Relay
-The Tor relay acts as an intermediary, receiving messages sent by the client and routing them locally. To start the relay:
+### Anonymous Mining
 
-1. Open a new shell.
-2. Run the following shell script:
+To simulate the mining process, open a new shell and run the following shell script:
+
+1. Start the Ethereum mining service:
+
    ```bash
-   ./src/tor_relay/start_relay_services.sh
+   ./src/anonymous-ether/start_eth_service.sh
    ```
 
 This script performs two main actions:
-- **Start a Tor process**: Uses the configuration file located at `./src/tor_relay/torrc`. This file sets up a hidden service on port 9001 and routes incoming messages to the local port 9001.
-- **Start the Tor relay program**: The relay program listens on the configured local port (9001 in the example), receives messages, and processes them.
+
+- **Start a Tor process**: Uses the configuration file located at `./src/anonymous-ether/torrc`. This file sets up a hidden service on port 9001 and routes incoming messages to the local port 9001.
+- **Run a network node**: The network node (miner) listens on the configured local port (9001 in the example) via Tor, receives transactions, and processes them.
 
 ### Client
+
 To send a test message from the client, open a new shell and run:
+
 ```bash
 ./src/client/start_client.sh
 ```
 
 ### Notes
-- The client and Tor relay set up separate Tor processes, each with different listening and receiving ports. Ensure all such ports are free and properly configured.
+
+- The client and Miner set up separate Tor processes, each with different listening and receiving ports. Ensure all such ports are free and properly configured.
 - Configuration files:
   - Tor client: `src/client/torrc`
-  - Tor relay: `src/tor_relay/torrc`
+  - Tor ETH miner: `src/anonymous-ether/torrc`
 - If you are using a deploy key for project updates, configure credentials as follows:
 
 ```bash
