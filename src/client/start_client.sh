@@ -13,8 +13,14 @@ echo "Started Tor with PID $TOR_PID"
 # Wait for Tor to initialize
 sleep 10
 
-# Start tor relay (Flask server)
-python3 src/client/send_message.py & CLIENT_PID=$!
+# Navigate to the child folder and run the dApp
+cd src/ || exit
+
+# Dynamically set PYTHONPATH to the source code folder
+export PYTHONPATH="$(pwd):$PYTHONPATH"
+
+# python3 src/client/send_message.py & CLIENT_PID=$!
+python3 client/send_file.py & CLIENT_PID=$!
 
 echo "Started test client with PID $CLIENT_PID"
 

@@ -20,11 +20,12 @@ cd src/anonymous-ether/ || exit
 find . -type d -name ".ipynb_checkpoints" -exec rm -rf {} +
 # Clear compiled file
 [ -d build ] || mkdir -p build
-rm -r build/ & mkdir build
+rm -r build/ && mkdir build
 
 brownie compile
 
-brownie run scripts/tor_are_int_test.py --network ganache-local 
+# brownie run scripts/tor_are_int_test.py --network ganache-local 
+brownie run scripts/tor_are_file_test.py --network ganache-local 
 
 # echo "Started ARE simulation with PID $ARE_PID"
 
