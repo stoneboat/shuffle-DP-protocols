@@ -1,6 +1,8 @@
 # About
 
-This branch focuses on testing the process of sending randomized encodings from a client to an Ethereum blockchain through Tor. The implementation leverages Brownie, a Python-based Ethereum development framework, and uses a local Ganache network to simulate both the client and the in-memory blockchain environment.
+This branch focuses on testing the process of sending randomized encodings from a client to an Ethereum blockchain through Tor. The implementation leverages Brownie, a Python-based Ethereum development framework, IPFS (InterPlanetary File System) for distributed file storage, and a local Ganache network to simulate both the client and the in-memory blockchain environment.
+
+In this project, the client uploads randomized encodings—which may be stored as long strings in a file—to the IPFS network. It then sends a smart contract command along with the corresponding Content Identifier (CID) of the file to an Ethereum node via Tor. The Ethereum node subsequently executes the smart contract function, storing the CID of the randomized encodings on the Ethereum blockchain.
 
 ---
 
@@ -17,6 +19,22 @@ sudo apt upgrade -y
 ```
 
 ### Dependencies Installation
+
+#### IPFS (InterPlanetary File System) Installation
+
+To install the IPFS daemon:
+```bash
+wget https://dist.ipfs.tech/go-ipfs/v0.14.0/go-ipfs_v0.14.0_linux-amd64.tar.gz
+tar xvfz go-ipfs_v0.14.0_linux-amd64.tar.gz
+cd go-ipfs
+sudo bash install.sh
+```
+
+If this is the first time using IPFS, initialize it with:
+```bash
+ipfs init
+```
+
 
 #### Tor Installation
 To install Tor on your system, use the following commands:
@@ -126,6 +144,12 @@ This will show the URL for accessing the JupyterLab web service.
 ---
 
 ## Usage
+
+### Set Up IPFS Network
+Start the IPFS daemon with:
+```bash
+ipfs daemon
+```
 
 ### Set Up Blockchain Network
 
