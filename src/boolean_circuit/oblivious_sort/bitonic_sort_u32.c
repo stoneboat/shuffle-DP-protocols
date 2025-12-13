@@ -1,9 +1,7 @@
 // src/boolean_circuit/oblivious_sort/bitonic_sort_u32.c
 #include <stdint.h>
 
-#ifndef N
-#define N 16
-#endif
+#include "obliv_sort_config.h"
 
 // Branch-free conditional swap using a 0/1 flag "swap".
 // If swap=1, swaps *x and *y; else leaves them unchanged.
@@ -30,13 +28,13 @@ static inline void compare_swap_desc_u32(uint32_t *x, uint32_t *y) {
 }
 
 // Bitonic sorting network (Batcher) using the XOR-pairing schedule.
-// Requires N to be a power of two (N=16 is fine).
-void sort_N_uint32(uint32_t a[N]) {
+// Requires OBLIV_SORT_N to be a power of two (OBLIV_SORT_N=16 is fine).
+void sort_N_uint32(uint32_t a[OBLIV_SORT_N]) {
     // k = size of subsequences being merged into bitonic sequences
-    for (uint32_t k = 2; k <= (uint32_t)N; k <<= 1) {
+    for (uint32_t k = 2; k <= (uint32_t)OBLIV_SORT_N; k <<= 1) {
         // j = distance of comparators in the current stage
         for (uint32_t j = k >> 1; j > 0; j >>= 1) {
-            for (uint32_t i = 0; i < (uint32_t)N; i++) {
+            for (uint32_t i = 0; i < (uint32_t)OBLIV_SORT_N; i++) {
                 uint32_t l = i ^ j;
                 // Handle each pair once.
                 // This condition depends only on indices (public), so it is fine.

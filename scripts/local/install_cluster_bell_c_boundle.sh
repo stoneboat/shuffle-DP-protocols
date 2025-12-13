@@ -55,21 +55,9 @@ if command -v cbmc >/dev/null 2>&1 && cbmc --version >/dev/null 2>&1; then
   which cbmc
   cbmc --version | head -n 10
   
-  # Ensure PATH is in ~/.bashrc for persistent availability
-  echo
-  echo "== Ensuring CBMC is in ~/.bashrc =="
-  PATH_EXPORT="export PATH=\"${PREFIX_DIR}/bin:\$PATH\""
-  if ! grep -Fxq "${PATH_EXPORT}" ~/.bashrc 2>/dev/null; then
-    echo "" >> ~/.bashrc
-    echo "# CBMC installation" >> ~/.bashrc
-    echo "${PATH_EXPORT}" >> ~/.bashrc
-    echo "Added CBMC PATH to ~/.bashrc"
-  else
-    echo "CBMC PATH already in ~/.bashrc"
-  fi
-  
   echo
   echo "== Done. CBMC is ready to use. =="
+  echo "== To use CBMC, run: export PATH=\"${PREFIX_DIR}/bin:\$PATH\" =="
 else
   # Determine parallelism
   if command -v nproc >/dev/null 2>&1; then
@@ -112,22 +100,95 @@ else
     cbmc --version | head -n 10
   fi
   
-  # Add to ~/.bashrc for persistent availability
   echo
-  echo "== Adding CBMC to ~/.bashrc for persistent availability =="
-  PATH_EXPORT="export PATH=\"${PREFIX_DIR}/bin:\$PATH\""
-  if ! grep -Fxq "${PATH_EXPORT}" ~/.bashrc 2>/dev/null; then
-    echo "" >> ~/.bashrc
-    echo "# CBMC installation" >> ~/.bashrc
-    echo "${PATH_EXPORT}" >> ~/.bashrc
-    echo "Added CBMC PATH to ~/.bashrc"
+  echo "== Done. CBMC installation complete. =="
+  echo "== To use CBMC, run: export PATH=\"${PREFIX_DIR}/bin:\$PATH\" =="
+fi
+
+echo
+echo "================================================================================"
+echo "== Installing CBMC-GC-2 =="
+echo "================================================================================"
+
+# CBMC-GC-2 Locations
+CBMC_GC2_REPO_DIR="${SRC_DIR}/cbmc-gc-2"
+CBMC_GC2_BUILD_DIR="${BUILD_DIR}/cbmc-gc-2"
+CBMC_GC2_PREFIX_DIR="/tmp/are_env/CBMC-GC-2/prefix"
+
+mkdir -p "${CBMC_GC2_PREFIX_DIR}"
+
+echo "SRC        : ${CBMC_GC2_REPO_DIR}"
+echo "BUILD      : ${CBMC_GC2_BUILD_DIR}"
+echo "INSTALL(PREFIX): ${CBMC_GC2_PREFIX_DIR}"
+echo
+
+# Clone or update CBMC-GC-2
+echo "== [CBMC-GC-2] Source checkout =="
+if [ -d "${CBMC_GC2_REPO_DIR}/.git" ]; then
+  echo "[GC2] Using existing repo: ${CBMC_GC2_REPO_DIR}"
+  # Optional refresh
+  git -C "${CBMC_GC2_REPO_DIR}" fetch --depth 1 origin || true
+else
+  echo "[GC2] Cloning into: ${CBMC_GC2_REPO_DIR}"
+  git clone https://gitlab.com/securityengineering/CBMC-GC-2.git "${CBMC_GC2_REPO_DIR}"
+fi
+echo
+
+# Check if CBMC-GC-2 is already installed
+export PATH="${CBMC_GC2_REPO_DIR}:${PATH}"
+if command -v cbmc-gc >/dev/null 2>&1; then
+  echo "== CBMC-GC-2 already installed =="
+  echo "== Verifying installation =="
+  which cbmc-gc || true
+  cbmc-gc --version 2>/dev/null | head -n 10 || true
+  
+  echo
+  echo "== Done. CBMC-GC-2 is ready to use. =="
+  echo "== To use CBMC-GC-2, run: export PATH=\"${CBMC_GC2_REPO_DIR}:\$PATH\" =="
+else
+  # Determine parallelism
+  if command -v nproc >/dev/null 2>&1; then
+    JOBS="$(nproc)"
   else
-    echo "CBMC PATH already in ~/.bashrc"
+    JOBS="$(getconf _NPROCESSORS_ONLN || echo 4)"
+  fi
+
+  # Check if already built (look for the binary in the source directory)
+  if [ -f "${CBMC_GC2_REPO_DIR}/cbmc-gc" ] || [ -f "${CBMC_GC2_REPO_DIR}/cbmc-gc.exe" ]; then
+    echo "== CBMC-GC-2 already built =="
+    echo "== Verifying installation =="
+    export PATH="${CBMC_GC2_REPO_DIR}:${PATH}"
+    which cbmc-gc || true
+    cbmc-gc --version 2>/dev/null | head -n 10 || true
+  else
+    echo "== Building CBMC-GC-2 from scratch =="
+    
+    # Build in-place (CBMC-GC-2 usually builds in repo with make).
+    # We'll log outputs into build dir to keep repo clean.
+    GC2_LOG_DIR="${CBMC_GC2_BUILD_DIR}/logs"
+    mkdir -p "${GC2_LOG_DIR}"
+
+    pushd "${CBMC_GC2_REPO_DIR}" >/dev/null
+
+    echo "== [GC2] minisat2 download/build =="
+    make minisat2-download 2>&1 | tee "${GC2_LOG_DIR}/minisat2-download.log"
+
+    echo
+    echo "== [GC2] build =="
+    make -j "${JOBS}" 2>&1 | tee "${GC2_LOG_DIR}/build.log"
+
+    popd >/dev/null
+
+    echo
+    echo "== Verifying installation =="
+    export PATH="${CBMC_GC2_REPO_DIR}:${PATH}"
+    which cbmc-gc || true
+    cbmc-gc --version 2>/dev/null | head -n 10 || true
   fi
   
   echo
-  echo "== Done. CBMC is now available in all future shell sessions. =="
-  echo "== For current shell, run: source ~/.bashrc =="
+  echo "== Done. CBMC-GC-2 installation complete. =="
+  echo "== To use CBMC-GC-2, run: export PATH=\"${CBMC_GC2_REPO_DIR}:\$PATH\" =="
 fi
 
 

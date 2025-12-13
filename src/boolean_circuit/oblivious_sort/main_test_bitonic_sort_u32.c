@@ -5,12 +5,10 @@
 #include <string.h>
 #include <time.h>
 
-#ifndef N
-#define N 16
-#endif
+#include "obliv_sort_config.h"
 
 // Declaration from bitonic_sort_u32.c
-void sort_N_uint32(uint32_t a[N]);
+void sort_N_uint32(uint32_t a[OBLIV_SORT_N]);
 
 static int cmp_u32_qsort(const void *pa, const void *pb) {
     uint32_t a = *(const uint32_t *)pa;
@@ -20,29 +18,29 @@ static int cmp_u32_qsort(const void *pa, const void *pb) {
     return 0;
 }
 
-static int is_sorted_non_decreasing(const uint32_t a[N]) {
-    for (int i = 1; i < N; i++) {
+static int is_sorted_non_decreasing(const uint32_t a[OBLIV_SORT_N]) {
+    for (int i = 1; i < OBLIV_SORT_N; i++) {
         if (a[i-1] > a[i]) return 0;
     }
     return 1;
 }
 
-static void dump_arr(const char *tag, const uint32_t a[N]) {
+static void dump_arr(const char *tag, const uint32_t a[OBLIV_SORT_N]) {
     printf("%s:", tag);
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < OBLIV_SORT_N; i++) {
         printf(" %u", a[i]);
     }
     printf("\n");
 }
 
-static void one_test(const uint32_t in[N], int *ok) {
-    uint32_t got[N];
-    uint32_t ref[N];
+static void one_test(const uint32_t in[OBLIV_SORT_N], int *ok) {
+    uint32_t got[OBLIV_SORT_N];
+    uint32_t ref[OBLIV_SORT_N];
     memcpy(got, in, sizeof(got));
     memcpy(ref, in, sizeof(ref));
 
     sort_N_uint32(got);
-    qsort(ref, N, sizeof(uint32_t), cmp_u32_qsort);
+    qsort(ref, OBLIV_SORT_N, sizeof(uint32_t), cmp_u32_qsort);
 
     if (memcmp(got, ref, sizeof(got)) != 0) {
         *ok = 0;
@@ -66,23 +64,23 @@ int main(void) {
 
     // 1) Adversarial cases
     {
-        uint32_t a1[N];
-        for (int i = 0; i < N; i++) a1[i] = 0;                 // all equal
+        uint32_t a1[OBLIV_SORT_N];
+        for (int i = 0; i < OBLIV_SORT_N; i++) a1[i] = 0;                 // all equal
         one_test(a1, &ok);
 
-        uint32_t a2[N];
-        for (int i = 0; i < N; i++) a2[i] = (uint32_t)i;       // already sorted
+        uint32_t a2[OBLIV_SORT_N];
+        for (int i = 0; i < OBLIV_SORT_N; i++) a2[i] = (uint32_t)i;       // already sorted
         one_test(a2, &ok);
 
-        uint32_t a3[N];
-        for (int i = 0; i < N; i++) a3[i] = (uint32_t)(N-1-i); // reverse sorted
+        uint32_t a3[OBLIV_SORT_N];
+        for (int i = 0; i < OBLIV_SORT_N; i++) a3[i] = (uint32_t)(OBLIV_SORT_N-1-i); // reverse sorted
         one_test(a3, &ok);
 
-        uint32_t a4[N];
-        for (int i = 0; i < N; i++) a4[i] = (uint32_t)(i % 4); // many duplicates
+        uint32_t a4[OBLIV_SORT_N];
+        for (int i = 0; i < OBLIV_SORT_N; i++) a4[i] = (uint32_t)(i % 4); // many duplicates
         one_test(a4, &ok);
 
-        uint32_t a5[N] = {
+        uint32_t a5[OBLIV_SORT_N] = {
             0u, 4294967295u, 1u, 4294967294u,
             2u, 3u, 4u, 5u,
             100u, 99u, 98u, 97u,
@@ -93,8 +91,8 @@ int main(void) {
 
     // 2) Random tests
     for (int t = 0; t < 200; t++) {
-        uint32_t a[N];
-        for (int i = 0; i < N; i++) {
+        uint32_t a[OBLIV_SORT_N];
+        for (int i = 0; i < OBLIV_SORT_N; i++) {
             // combine rand() calls to get more bits than RAND_MAX
             uint32_t r1 = (uint32_t)rand();
             uint32_t r2 = (uint32_t)rand();
@@ -105,10 +103,10 @@ int main(void) {
     }
 
     if (ok) {
-        printf("PASS (N=%d)\n", N);
+        printf("PASS (OBLIV_SORT_N=%d)\n", OBLIV_SORT_N);
         return 0;
     } else {
-        printf("FAIL (N=%d)\n", N);
+        printf("FAIL (OBLIV_SORT_N=%d)\n", OBLIV_SORT_N);
         return 1;
     }
 }
