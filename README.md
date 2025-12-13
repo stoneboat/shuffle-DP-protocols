@@ -58,7 +58,16 @@ By default, the script runs circuit minimization with a 10-minute timeout. For l
 
 **Note:** If minimization times out, the circuit generation continues and produces a non-minimized (but functionally correct) circuit. The `--no-minimization` option skips the SAT-based equivalence check entirely for faster generation.
 
-This will generate the circuit files in the specified output directory.
+This will generate the circuit files in the specified output directory, including `output.gate.txt` which contains the circuit netlist.
+
+### 4) Parse and analyze the boolean circuit
+
+After generating the circuit, you can load it as a graph, partition it, and compute partitioning statistics. This is useful for understanding circuit structure and evaluating different partitioning strategies.
+
+If you are interested in how to compute statistics for the partition, please see the notebook `Notebook/boolean_circuits/oblivious_sorting.ipynb` for an example. The notebook demonstrates:
+- How to read the boolean circuit file (`output.gate.txt`) and convert it to a graph representation
+- How to run a graph partitioner (KaHIP) on the circuit graph
+- How to compute partitioning statistics such as cut size, boundary edges, and load distribution
 
 **Testing the generated circuit:**
 

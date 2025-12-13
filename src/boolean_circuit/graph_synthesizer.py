@@ -208,6 +208,16 @@ class PartitionableGraph:
         counts = np.bincount(pu[mask], minlength=nparts)
         return counts.astype(np.int64)
 
+    def incoming_boundary_per_part(self, part: np.ndarray, nparts: int) -> np.ndarray:
+        """
+        For each part i: number of incoming pin-level edges entering that part.
+        """
+        pu = part[self.src - 1]
+        pv = part[self.dst - 1]
+        mask = (pu != pv)
+        counts = np.bincount(pv[mask], minlength=nparts)
+        return counts.astype(np.int64)
+
     def load_per_part(self, part: np.ndarray, nparts: int) -> np.ndarray:
         """
         Sum of node weights (e.g., non-XOR count) per part.
@@ -216,17 +226,30 @@ class PartitionableGraph:
 
     def summary_metrics(self, part: np.ndarray, nparts: int) -> Dict[str, object]:
         """
-        Convenience summary: cut, max boundary out, load imbalance.
+        Convenience summary: cut, boundary stats (in/out/cross), load imbalance.
         """
         cut = self.cut_size_pin(part)
         outb = self.outgoing_boundary_per_part(part, nparts)
+        inb = self.incoming_boundary_per_part(part, nparts)
         load = self.load_per_part(part, nparts)
+        # cross boundary keeps both directions (out, in) for each part
+        cross_boundary = (
+            np.stack([outb, inb], axis=1)
+            if nparts
+            else np.empty((0, 2), dtype=np.int64)
+        )
+        total_nonxor = int(self.vwgt.sum()) if self.vwgt.size else 0
         return {
             "cut_pin": cut,
             "max_out_boundary": int(outb.max()) if outb.size else 0,
+            "max_in_boundary": int(inb.max()) if inb.size else 0,
             "out_boundary": outb,
+            "in_boundary": inb,
+            "cross_boundary": cross_boundary,
+            "max_cross_boundary": int((outb + inb).max()) if outb.size else 0,
             "load": load,
             "max_load": float(load.max()) if load.size else 0.0,
             "min_load": float(load.min()) if load.size else 0.0,
             "avg_load": float(load.mean()) if load.size else 0.0,
+            "total_nonxor": total_nonxor,
         }
