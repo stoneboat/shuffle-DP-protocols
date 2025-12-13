@@ -9,6 +9,8 @@ CBMC_GC_BIN="${CBMC_GC_BIN:-${DEFAULT_CBMC_GC_BIN}}"
 OUTDIR="${OUTDIR:-${REPO_ROOT}/build/boolean_circuits/bitonic_sort_u32}"
 OBLIV_SORT_N="${OBLIV_SORT_N:-16}"
 UNWIND="${UNWIND:-64}"
+NO_MINIMIZATION="${NO_MINIMIZATION:-false}"
+MINIMIZATION_TIMEOUT_MINUTES="${MINIMIZATION_TIMEOUT_MINUTES:-10}"
 EXTRA_CBMC_ARGS=()
 
 usage() {
@@ -20,6 +22,8 @@ Options:
   -o, --outdir DIR     Output directory for the generated circuit (default: build/boolean_circuits/bitonic_sort_u32).
       --cbmc-gc PATH   Path to the cbmc-gc binary (default: /tmp/are_env/CBMC-GC-2/build/bin/cbmc-gc).
       --unwind K       Loop unwind bound passed to cbmc-gc (default: 64).
+      --no-minimization Skip circuit minimization and SAT-based equivalence check (faster, but larger circuits).
+      --min-timeout M  Limit minimization time to M minutes (default: 10 minutes).
   -h, --help           Show this message.
 
 You can pass additional cbmc-gc flags after a literal "--".
@@ -52,6 +56,15 @@ while [[ $# -gt 0 ]]; do
     --unwind)
       [[ $# -ge 2 ]] || error "--unwind requires a value"
       UNWIND="$2"
+      shift 2
+      ;;
+    --no-minimization)
+      NO_MINIMIZATION="true"
+      shift
+      ;;
+    --min-timeout)
+      [[ $# -ge 2 ]] || error "--min-timeout requires a value (in minutes)"
+      MINIMIZATION_TIMEOUT_MINUTES="$2"
       shift 2
       ;;
     -h|--help)
@@ -90,18 +103,39 @@ echo "Binary     : ${CBMC_GC_BIN}"
 echo "Out dir    : ${OUTDIR}"
 echo "Elements   : ${OBLIV_SORT_N}"
 echo "Unwind bound: ${UNWIND}"
+if [[ "${NO_MINIMIZATION}" == "true" ]]; then
+  echo "Minimization: DISABLED (will skip SAT-based equivalence check)"
+else
+  echo "Minimization: ENABLED with ${MINIMIZATION_TIMEOUT_MINUTES} minute timeout"
+fi
 echo
 
+# Build CBMC arguments
+CBMC_ARGS=(
+  --function mpc_main
+  --outdir "${OUTDIR}"
+  --unwind "${UNWIND}"
+  --unwinding-assertions
+  -DOBLIV_SORT_N="${OBLIV_SORT_N}"
+)
+
+# Add minimization options
+if [[ "${NO_MINIMIZATION}" == "true" ]]; then
+  CBMC_ARGS+=(--no-minimization)
+else
+  # Convert minutes to seconds for CBMC
+  MINIMIZATION_TIMEOUT_SECONDS=$((MINIMIZATION_TIMEOUT_MINUTES * 60))
+  CBMC_ARGS+=(--minimization-time-limit "${MINIMIZATION_TIMEOUT_SECONDS}")
+fi
+
+# Add any extra arguments
+CBMC_ARGS+=("${EXTRA_CBMC_ARGS[@]}")
+
+# Add input files
+CBMC_ARGS+=("${IMPL}" "${HARNESS}")
+
 set -x
-"${CBMC_GC_BIN}" \
-  --function mpc_main \
-  --outdir "${OUTDIR}" \
-  --unwind "${UNWIND}" \
-  --unwinding-assertions \
-  -DOBLIV_SORT_N="${OBLIV_SORT_N}" \
-  "${EXTRA_CBMC_ARGS[@]}" \
-  "${IMPL}" \
-  "${HARNESS}"
+"${CBMC_GC_BIN}" "${CBMC_ARGS[@]}"
 set +x
 
 echo
