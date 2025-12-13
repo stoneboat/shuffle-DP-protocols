@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+
+DEFAULT_CBMC_GC_BIN="/tmp/are_env/CBMC-GC-2/build/bin/cbmc-gc"
+CBMC_GC_BIN="${CBMC_GC_BIN:-${DEFAULT_CBMC_GC_BIN}}"
+OUTDIR="${OUTDIR:-${REPO_ROOT}/build/boolean_circuits/bitonic_sort_u32}"
+OBLIV_SORT_N="${OBLIV_SORT_N:-16}"
+UNWIND="${UNWIND:-64}"
+EXTRA_CBMC_ARGS=()
+
+usage() {
+  cat <<'EOF'
+Usage: gen_circuit_file.sh [options] [-- cbmc_args...]
+
+Options:
+  -n, --elements N     Number of uint32_t elements to sort (power of two, default: 16).
+  -o, --outdir DIR     Output directory for the generated circuit (default: build/boolean_circuits/bitonic_sort_u32).
+      --cbmc-gc PATH   Path to the cbmc-gc binary (default: /tmp/are_env/CBMC-GC-2/build/bin/cbmc-gc).
+      --unwind K       Loop unwind bound passed to cbmc-gc (default: 64).
+  -h, --help           Show this message.
+
+You can pass additional cbmc-gc flags after a literal "--".
+Environment overrides: CBMC_GC_BIN, OUTDIR, OBLIV_SORT_N, UNWIND.
+EOF
+}
+
+error() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--elements)
+      [[ $# -ge 2 ]] || error "--elements requires a value"
+      OBLIV_SORT_N="$2"
+      shift 2
+      ;;
+    -o|--outdir)
+      [[ $# -ge 2 ]] || error "--outdir requires a value"
+      OUTDIR="$2"
+      shift 2
+      ;;
+    --cbmc-gc)
+      [[ $# -ge 2 ]] || error "--cbmc-gc requires a path"
+      CBMC_GC_BIN="$2"
+      shift 2
+      ;;
+    --unwind)
+      [[ $# -ge 2 ]] || error "--unwind requires a value"
+      UNWIND="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      EXTRA_CBMC_ARGS=("$@")
+      break
+      ;;
+    *)
+      error "Unknown option: $1"
+      ;;
+  esac
+done
+
+[[ -x "${CBMC_GC_BIN}" ]] || error "cbmc-gc binary not found or not executable: ${CBMC_GC_BIN}"
+[[ "${OBLIV_SORT_N}" =~ ^[0-9]+$ ]] || error "OBLIV_SORT_N must be a positive integer"
+(( OBLIV_SORT_N > 0 )) || error "OBLIV_SORT_N must be greater than zero"
+
+if (( (OBLIV_SORT_N & (OBLIV_SORT_N - 1)) != 0 )); then
+  echo "Warning: OBLIV_SORT_N=${OBLIV_SORT_N} is not a power of two; bitonic sort expects a power of two." >&2
+fi
+
+mkdir -p "${OUTDIR}"
+
+HARNESS="${SCRIPT_DIR}/bitonic_sort_u32_harness.c"
+IMPL="${SCRIPT_DIR}/bitonic_sort_u32.c"
+
+[[ -f "${HARNESS}" ]] || error "Missing harness file: ${HARNESS}"
+[[ -f "${IMPL}" ]] || error "Missing implementation file: ${IMPL}"
+
+echo "== Generating circuit with cbmc-gc =="
+echo "Binary     : ${CBMC_GC_BIN}"
+echo "Out dir    : ${OUTDIR}"
+echo "Elements   : ${OBLIV_SORT_N}"
+echo "Unwind bound: ${UNWIND}"
+echo
+
+set -x
+"${CBMC_GC_BIN}" \
+  --function mpc_main \
+  --outdir "${OUTDIR}" \
+  --unwind "${UNWIND}" \
+  --unwinding-assertions \
+  -DOBLIV_SORT_N="${OBLIV_SORT_N}" \
+  "${EXTRA_CBMC_ARGS[@]}" \
+  "${IMPL}" \
+  "${HARNESS}"
+set +x
+
+echo
+echo "Circuit artifacts written to ${OUTDIR}"
+ls -1 "${OUTDIR}"
