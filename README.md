@@ -28,5 +28,25 @@ source scripts/local/env_bell_circuit
 ```
 This loads the required modules and updates PATH so cbmc and the circuit compiler are available in your current shell.
 
+### 3) Generate the boolean circuit representation
+
+Generate the boolean circuit representation from the bounded C implementation using the provided script:
+
+```bash
+./src/boolean_circuit/oblivious_sort/gen_circuit_file.sh -n 8 --unwind 16 -o build/boolean_circuits/bitonic_sort_u32_N8
+```
+
+This will generate the circuit files in the specified output directory.
+
+**Testing the generated circuit:**
+
+You can test the generated circuit by first creating a reference file for sorting (e.g., `reference.c`), then run:
+
+```bash
+cbmc-gc-2/bin/circuit-utils --create-tester tester.cpp --reference reference.c
+```
+
+Then compile and run the tester to verify the circuit correctness.
+
 ---
 
