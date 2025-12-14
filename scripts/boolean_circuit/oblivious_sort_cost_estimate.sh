@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-NPARTS=128
+NPARTS=256
 UNWIND_OVERRIDE=""
 KAHIP_GAMMA=0.10
 KAHIP_SEED=2

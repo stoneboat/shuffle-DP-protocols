@@ -147,6 +147,12 @@ def compute_statistics(gate_file, num_inputs=None, elem_bits=32, nparts=8,
         f"  max_out_boundary : {_fmt(metrics['max_out_boundary'])}",
         f"  max_cross_boundary: {_fmt(metrics['max_cross_boundary'])}",
         f"  max_load         : {_fmt(metrics['max_load'])}",
+        "",
+        "Cost statistics:",
+        f"  max_client_balance_computation_cost (s): {metrics['max_client_balance_computation_cost (s)']:.6e}",
+        f"  max_client_balance_communication_cost (MB): {metrics['max_client_balance_communication_cost (MB)']:.6e}",
+        f"  baseline computation cost (s): {metrics['baseline computation cost (s)']:.6e}",
+        f"  baseline communication cost (MB): {metrics['baseline communication cost (MB)']:.6e}",
     ]
     
     if partition_note:

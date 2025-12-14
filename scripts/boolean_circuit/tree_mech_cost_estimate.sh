@@ -4,10 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-NPARTS=8
-NUM_STEPS=8
-VEC_DIM=8
-LOG_STEPS=4
+NPARTS=256
+NUM_STEPS=256
+VEC_DIM=1
+LOG_STEPS=""
 FRAC_BITS=32
 UNWIND_OVERRIDE=""
 KAHIP_GAMMA=0.10
@@ -26,7 +26,7 @@ Usage: tree_mech_cost_estimate.sh [options]
 Options:
   -t, --num-steps T     Number of time steps/releases NUM_STEPS (default: 8).
   -d, --vec-dim D       Length of each released vector VEC_DIM (default: 8).
-  -l, --log-steps L     Fenwick-hop bound LOG_STEPS (default: 4; ensure >= ceil(log2(T))+1).
+  -l, --log-steps L     Fenwick-hop bound LOG_STEPS (default: computed as ceil(log2(T))+1).
   -f, --frac-bits B     Fixed-point fractional bits (default: 32).
   -p, --parts P         Number of partitions for KaHIP/balancer (default: 128).
       --unwind K        Override loop unwind bound passed to cbmc-gc (default: max(T*D, T+1, T, D, L)+1).
@@ -118,14 +118,28 @@ done
 [[ "${NPARTS}" =~ ^[0-9]+$ ]]       || error "parts must be a positive integer"
 [[ "${NUM_STEPS}" =~ ^[0-9]+$ ]]    || error "num-steps must be a positive integer"
 [[ "${VEC_DIM}" =~ ^[0-9]+$ ]]      || error "vec-dim must be a positive integer"
-[[ "${LOG_STEPS}" =~ ^[0-9]+$ ]]    || error "log-steps must be a positive integer"
 [[ "${FRAC_BITS}" =~ ^[0-9]+$ ]]    || error "frac-bits must be a non-negative integer"
 [[ "${KAHIP_GAMMA}" =~ ^[0-9.]+$ ]] || error "gamma must be numeric"
 [[ "${KAHIP_SEED}" =~ ^[0-9]+$ ]]   || error "seed must be a positive integer"
 (( NPARTS > 0 ))       || error "parts must be > 0"
 (( NUM_STEPS > 0 ))    || error "num-steps must be > 0"
 (( VEC_DIM > 0 ))      || error "vec-dim must be > 0"
-(( LOG_STEPS > 0 ))    || error "log-steps must be > 0"
+
+# Compute LOG_STEPS from NUM_STEPS if not provided: ceil(log2(NUM_STEPS)) + 1
+if [[ -z "${LOG_STEPS}" ]]; then
+  # Calculate ceil(log2(NUM_STEPS)) + 1
+  # Find the smallest power of 2 >= NUM_STEPS, then add 1
+  log_val=0
+  power=1
+  while (( power < NUM_STEPS )); do
+    log_val=$(( log_val + 1 ))
+    power=$(( power * 2 ))
+  done
+  LOG_STEPS=$(( log_val + 1 ))
+else
+  [[ "${LOG_STEPS}" =~ ^[0-9]+$ ]]    || error "log-steps must be a positive integer"
+  (( LOG_STEPS > 0 ))    || error "log-steps must be > 0"
+fi
 
 UNWIND="${UNWIND_OVERRIDE}"
 if [[ -z "${UNWIND}" ]]; then

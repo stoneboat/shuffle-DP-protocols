@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict
+import os
 import numpy as np
 
 
@@ -18,6 +19,7 @@ class CircuitGraph:
     out_edges: List[List[Tuple[int,int]]]  # out_edges[g] = [(dst_gate, dst_pin), ...]
     # optional: output sinks
     out_to_outputbits: Optional[List[List[int]]] = None  # list per gate: output bit indices it drives
+    total_input_bits: Optional[int] = None  # total number of input bits from output.inputs.partyA.txt
 
     @staticmethod
     def from_cbmc_gc_gate_file(path: str) -> "CircuitGraph":
@@ -62,12 +64,31 @@ class CircuitGraph:
                         out_to_outputbits[line_no].append(-dest_id)
 
         num_gates = len(gate_type) - 1
+
+        # Try to load total_input_bits from output.inputs.partyA.txt in the same directory
+        total_input_bits = None
+        gate_file_dir = os.path.dirname(os.path.abspath(path))
+        party_a_file = os.path.join(gate_file_dir, "output.inputs.partyA.txt")
+        
+        if os.path.exists(party_a_file):
+            try:
+                with open(party_a_file, "r") as f:
+                    first_line = f.readline().strip()
+                    if first_line:
+                        parts = first_line.split()
+                        if len(parts) >= 3:
+                            total_input_bits = int(parts[2])
+            except (ValueError, IOError) as e:
+                # If we can't read or parse the file, just continue without it
+                pass
+        
         return CircuitGraph(
             num_gates=num_gates,
             gate_type=gate_type,
             fanin=fanin,
             out_edges=out_edges,
             out_to_outputbits=out_to_outputbits,
+            total_input_bits=total_input_bits,
         )
 
     def nonxor_weight(self, xor_is_free: bool = True) -> np.ndarray:
@@ -168,6 +189,7 @@ class CircuitGraph:
             xadj=xadj,
             adjncy=adjncy,
             adjwgt=adjwgt,
+            total_input_bits=self.total_input_bits,
         )
 
 
@@ -191,6 +213,7 @@ class PartitionableGraph:
     xadj: Optional[np.ndarray] = None   # shape (m+1,)
     adjncy: Optional[np.ndarray] = None # shape (nnz,)
     adjwgt: Optional[np.ndarray] = None # shape (nnz,)
+    total_input_bits: Optional[int] = None  # total number of input bits from output.inputs.partyA.txt
 
     def cut_size_pin(self, part: np.ndarray) -> int:
         """
@@ -242,6 +265,20 @@ class PartitionableGraph:
             else np.empty((0, 2), dtype=np.int64)
         )
         total_nonfree = int(self.vwgt.sum()) if self.vwgt.size else 0
+
+        client_garbling_computation_cost = load * 3 * 1e-9 # 3 ns per gate
+        client_garbling_communication_cost = load * 24 * 1e-6 # 192 bits per gate
+
+        assert self.total_input_bits is not None, "total_input_bits is not set"
+        client_input_bits = self.total_input_bits / nparts
+        client_ARE_computation_cost = (load + client_input_bits) * 0.01
+        client_ARE_communication_cost = (load + client_input_bits) * 381 * 1e-6 # 3048 bits per gate
+
+        client_balance_computation_cost = client_garbling_computation_cost + client_ARE_computation_cost
+        client_balance_communication_cost = client_garbling_communication_cost + client_ARE_communication_cost
+
+        baseline_computation_cost = total_nonfree * 3 * 1e-9 + self.total_input_bits * 0.01
+        baseline_communication_cost = total_nonfree * 24 * 1e-6 + self.total_input_bits * 381 * 1e-6
         return {
             "cut_pin": cut,
             "max_out_boundary": int(outb.max()) if outb.size else 0,
@@ -255,4 +292,8 @@ class PartitionableGraph:
             "min_load": float(load.min()) if load.size else 0.0,
             "avg_load": float(load.mean()) if load.size else 0.0,
             "total_nonfree": total_nonfree,
+            "max_client_balance_computation_cost (s)": float(client_balance_computation_cost.max()) if client_balance_computation_cost.size else 0.0,
+            "max_client_balance_communication_cost (MB)": float(client_balance_communication_cost.max()) if client_balance_communication_cost.size else 0.0,
+            "baseline computation cost (s)": float(baseline_computation_cost) if total_nonfree > 0 else 0.0,
+            "baseline communication cost (MB)": float(baseline_communication_cost) if total_nonfree > 0 else 0.0,
         }
