@@ -41,5 +41,6 @@ Output mpc_main(InputA INPUT_A, InputB INPUT_B) {
 
     Output out;
     out.selected_index = argmax;
+
     return out;
 }

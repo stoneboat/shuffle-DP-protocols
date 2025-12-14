@@ -4,9 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-NPARTS=8
+NPARTS=128
 NUM_RECORDS=8
-NUM_CHOICES=8
+NUM_CHOICES=16
 FRAC_BITS=32
 UNWIND_OVERRIDE=""
 KAHIP_GAMMA=0.10
@@ -27,7 +27,7 @@ Options:
   -d, --num-choices D   Number of categories/columns per record (default: 8).
   -f, --frac-bits B     Fixed-point fractional bits for the Gumbel noise (default: 32).
   -p, --parts P         Number of partitions for KaHIP (default: 8).
-      --unwind K        Override loop unwind bound passed to cbmc-gc (default: max(N, D)).
+      --unwind K        Override loop unwind bound passed to cbmc-gc (default: N*D+1).
   -g, --gamma G         Imbalance tolerance passed to KaHIP (default: 0.10).
       --seed S          Seed for KaHIP (default: 2).
   -o, --outdir DIR      Output directory for circuit artifacts (default: build/boolean_circuits/dp_selection_gumbel_u1_N{N}_D{D}).
@@ -120,11 +120,7 @@ done
 
 UNWIND="${UNWIND_OVERRIDE}"
 if [[ -z "${UNWIND}" ]]; then
-  if (( NUM_RECORDS > NUM_CHOICES )); then
-    UNWIND="${NUM_RECORDS}"
-  else
-    UNWIND="${NUM_CHOICES}"
-  fi
+  UNWIND=$(( NUM_RECORDS * NUM_CHOICES + 1 ))
 fi
 
 if [[ -z "${OUT_TAG}" ]]; then

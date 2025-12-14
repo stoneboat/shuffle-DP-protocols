@@ -115,5 +115,5 @@ uint32_t dp_select_obliv_gumbel_argmax(
         best_idx   = ct_select_u32(swap, j,          best_idx);
     }
 
-    return best_idx;
+    return best_idx;    
 }
