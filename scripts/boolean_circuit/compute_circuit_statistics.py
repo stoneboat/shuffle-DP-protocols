@@ -3,7 +3,7 @@
 Compute statistics for a boolean circuit from a gate file.
 
 This script processes a circuit gate file and outputs statistics including:
-- non_xor_gates
+- non_free_gates
 - max_in_boundary
 - max_out_boundary
 - max_cross_boundary
@@ -142,7 +142,7 @@ def compute_statistics(gate_file, num_inputs=None, elem_bits=32, nparts=8,
     lines = [
         f"For the circuit '{circuit_name}' the input number is {num_inputs} and each item uses {elem_bits}-bit words.",
         "Circuit statistics:",
-        f"  non_xor_gates    : {_fmt(metrics['total_nonxor'])}",
+        f"  non_free_gates   : {_fmt(metrics['total_nonfree'])}",
         f"  max_in_boundary  : {_fmt(metrics['max_in_boundary'])}",
         f"  max_out_boundary : {_fmt(metrics['max_out_boundary'])}",
         f"  max_cross_boundary: {_fmt(metrics['max_cross_boundary'])}",

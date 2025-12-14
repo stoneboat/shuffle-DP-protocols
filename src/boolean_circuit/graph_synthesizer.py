@@ -73,11 +73,14 @@ class CircuitGraph:
     def nonxor_weight(self, xor_is_free: bool = True) -> np.ndarray:
         """
         Return node weights w[g] used for balance.
-        Default: w[g]=1 for non-XOR, 0 for XOR.
+        Default: XOR/NOT gates cost 0, AND/OR (and other nonlinear gates) cost 1.
         """
+        free_gates = {"XOR", "NOT"} if xor_is_free else set()
+
         w = np.zeros(self.num_gates + 1, dtype=np.int32)
         for g in range(1, self.num_gates + 1):
-            if self.gate_type[g] == "XOR" and xor_is_free:
+            gtype = self.gate_type[g].upper()
+            if gtype in free_gates:
                 w[g] = 0
             else:
                 w[g] = 1
@@ -238,7 +241,7 @@ class PartitionableGraph:
             if nparts
             else np.empty((0, 2), dtype=np.int64)
         )
-        total_nonxor = int(self.vwgt.sum()) if self.vwgt.size else 0
+        total_nonfree = int(self.vwgt.sum()) if self.vwgt.size else 0
         return {
             "cut_pin": cut,
             "max_out_boundary": int(outb.max()) if outb.size else 0,
@@ -251,5 +254,5 @@ class PartitionableGraph:
             "max_load": float(load.max()) if load.size else 0.0,
             "min_load": float(load.min()) if load.size else 0.0,
             "avg_load": float(load.mean()) if load.size else 0.0,
-            "total_nonxor": total_nonxor,
+            "total_nonfree": total_nonfree,
         }
