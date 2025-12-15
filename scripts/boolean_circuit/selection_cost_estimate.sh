@@ -23,7 +23,7 @@ usage() {
 Usage: selection_cost_estimate.sh [options]
 
 Options:
-  -n, --num-records N   Number of records in the histogram (default: 8).
+  -n, --num-records N   Number of records in the histogram (ignored; always set to P).
   -d, --num-choices D   Number of categories/columns per record (default: 8).
   -f, --frac-bits B     Fixed-point fractional bits for the Gumbel noise (default: 32).
   -p, --parts P         Number of partitions for KaHIP (default: 8).
@@ -107,6 +107,9 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Always keep NUM_RECORDS in sync with NPARTS, regardless of -n/--num-records.
+NUM_RECORDS="${NPARTS}"
 
 [[ "${NPARTS}" =~ ^[0-9]+$ ]]       || error "parts must be a positive integer"
 [[ "${NUM_RECORDS}" =~ ^[0-9]+$ ]]  || error "num-records must be a positive integer"

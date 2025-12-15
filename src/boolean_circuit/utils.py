@@ -32,6 +32,7 @@ def compute_circuit_cost(circut_args, dir_args):
 
     NPARTS = circut_args["NPARTS"]
     circuit_name = circut_args["circuit_name"]
+    
 
     script = os.path.join(scripts_dir, "boolean_circuit", f"{circuit_name}_cost_estimate.sh")
 
@@ -59,13 +60,25 @@ def compute_circuit_cost(circut_args, dir_args):
         )
         end_time = time.time()
     elif circuit_name == "selection":
+        # Default to 16 choices if not provided, matching the script's default
+        # Optional parameters for specific circuits
+        NUM_CHOICES = circut_args["num_choices"]
+        assert NUM_CHOICES is not None, "NUM_CHOICES must be provided for selection"
         start_time = time.time()
         result = subprocess.run(
             [
                 script,
                 "-p",
                 str(NPARTS),
+                "-d",
+                str(NUM_CHOICES),
+                "-o",
+                out_dir,
             ],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         end_time = time.time()
 
