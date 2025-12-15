@@ -271,8 +271,8 @@ class PartitionableGraph:
 
         assert self.total_input_bits is not None, "total_input_bits is not set"
         client_input_bits = self.total_input_bits / nparts
-        client_ARE_computation_cost = (load + client_input_bits) * 0.01
-        client_ARE_communication_cost = (load + client_input_bits) * 381 * 1e-6 # 3048 bits per gate
+        client_ARE_computation_cost = (outb + inb + client_input_bits) * 0.01
+        client_ARE_communication_cost = (outb + inb + client_input_bits) * 381 * 1e-6 # 3048 bits per gate
 
         client_balance_computation_cost = client_garbling_computation_cost + client_ARE_computation_cost
         client_balance_communication_cost = client_garbling_communication_cost + client_ARE_communication_cost

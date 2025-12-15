@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-NPARTS=256
-NUM_RECORDS=256
+NPARTS=128
+NUM_RECORDS=128
 NUM_CHOICES=16
 FRAC_BITS=32
 UNWIND_OVERRIDE=""
