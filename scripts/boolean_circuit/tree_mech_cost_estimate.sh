@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-NPARTS=256
-NUM_STEPS=256
+NPARTS=32
+NUM_STEPS=32
 VEC_DIM=1
 LOG_STEPS=""
 FRAC_BITS=32
@@ -16,8 +16,8 @@ OUTDIR=""
 OUT_TAG=""
 PY_ENV_PREFIX="${PY_ENV_PREFIX:-/tmp/python-venv/ARE_venv}"
 ENV_SCRIPT="${REPO_ROOT}/scripts/local/env_bell_circuit"
-REPORT_FILENAME="tree_mechanism_stats.txt"
-CIRCUIT_NAME="tree_mechanism"
+REPORT_FILENAME="tree_mech_stats.txt"
+CIRCUIT_NAME="tree_mech"
 
 usage() {
   cat <<'EOF'
@@ -114,6 +114,9 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Always keep NUM_STEPS in sync with NPARTS, regardless of -t/--num-steps.
+NUM_STEPS="${NPARTS}"
 
 [[ "${NPARTS}" =~ ^[0-9]+$ ]]       || error "parts must be a positive integer"
 [[ "${NUM_STEPS}" =~ ^[0-9]+$ ]]    || error "num-steps must be a positive integer"

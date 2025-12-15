@@ -41,7 +41,7 @@ def compute_circuit_cost(circut_args, dir_args):
     out_dir = os.path.join(data_dir, "boolean_circuits", out_tag)
     os.makedirs(os.path.join(data_dir, "boolean_circuits"), exist_ok=True)
 
-    assert circuit_name in ["oblivious_sort", "selection"], f"Invalid circuit name: {circuit_name}"
+    assert circuit_name in ["oblivious_sort", "selection", "tree_mech"], f"Invalid circuit name: {circuit_name}"
 
     if circuit_name == "oblivious_sort":
         start_time = time.time()
@@ -81,7 +81,26 @@ def compute_circuit_cost(circut_args, dir_args):
             check=False,
         )
         end_time = time.time()
-
+    elif circuit_name == "tree_mech":
+        VEC_DIM = circut_args["vec_dim"]
+        assert VEC_DIM is not None, "VEC_DIM must be provided for tree_mech"
+        start_time = time.time()
+        result = subprocess.run(
+            [
+                script,
+                "-p",
+                str(NPARTS),
+                "-d",
+                str(VEC_DIM),
+                "-o",
+                out_dir,
+            ],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        end_time = time.time()
     print(f"Script execution time with NPARTS={NPARTS} and circuit name={circuit_name}: {end_time - start_time} seconds")
 
     if result.returncode != 0:
@@ -95,6 +114,8 @@ def compute_circuit_cost(circut_args, dir_args):
             stats_file = os.path.join(out_dir, "oblivious_sorting_stats.txt")
         elif circuit_name == "selection":
             stats_file = os.path.join(out_dir, "dp_selection_gumbel_stats.txt")
+        elif circuit_name == "tree_mech":
+            stats_file = os.path.join(out_dir, "tree_mech_stats.txt")
 
         if not os.path.exists(stats_file):
             raise FileNotFoundError(f"Stats file not found: {stats_file}")
