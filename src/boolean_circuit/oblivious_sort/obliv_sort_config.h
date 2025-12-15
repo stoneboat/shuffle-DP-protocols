@@ -11,4 +11,8 @@
 #define OBLIV_SORT_N 16
 #endif
 
-#define OBLIV_SORT_W 32  // bit-width per element (uint32_t)
+// Bit-width per element. Allow override at compile time to align with
+// the circuit generation settings.
+#ifndef OBLIV_SORT_W
+#define OBLIV_SORT_W 32
+#endif

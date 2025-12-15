@@ -8,6 +8,7 @@ DEFAULT_CBMC_GC_BIN="/tmp/are_env/CBMC-GC-2/build/bin/cbmc-gc"
 CBMC_GC_BIN="${CBMC_GC_BIN:-${DEFAULT_CBMC_GC_BIN}}"
 OUTDIR="${OUTDIR:-${REPO_ROOT}/build/boolean_circuits/bitonic_sort_u32}"
 OBLIV_SORT_N="${OBLIV_SORT_N:-16}"
+OBLIV_SORT_W="${OBLIV_SORT_W:-32}"
 UNWIND="${UNWIND:-64}"
 NO_MINIMIZATION="${NO_MINIMIZATION:-false}"
 MINIMIZATION_TIMEOUT_MINUTES="${MINIMIZATION_TIMEOUT_MINUTES:-10}"
@@ -19,6 +20,7 @@ Usage: gen_circuit_file.sh [options] [-- cbmc_args...]
 
 Options:
   -n, --elements N     Number of uint32_t elements to sort (power of two, default: 16).
+  -w, --bitwidth W     Bit-width per element (default: 32; overrides OBLIV_SORT_W).
   -o, --outdir DIR     Output directory for the generated circuit (default: build/boolean_circuits/bitonic_sort_u32).
       --cbmc-gc PATH   Path to the cbmc-gc binary (default: /tmp/are_env/CBMC-GC-2/build/bin/cbmc-gc).
       --unwind K       Loop unwind bound passed to cbmc-gc (default: 64).
@@ -27,7 +29,7 @@ Options:
   -h, --help           Show this message.
 
 You can pass additional cbmc-gc flags after a literal "--".
-Environment overrides: CBMC_GC_BIN, OUTDIR, OBLIV_SORT_N, UNWIND.
+Environment overrides: CBMC_GC_BIN, OUTDIR, OBLIV_SORT_N, OBLIV_SORT_W, UNWIND.
 EOF
 }
 
@@ -41,6 +43,11 @@ while [[ $# -gt 0 ]]; do
     -n|--elements)
       [[ $# -ge 2 ]] || error "--elements requires a value"
       OBLIV_SORT_N="$2"
+      shift 2
+      ;;
+    -w|--bitwidth)
+      [[ $# -ge 2 ]] || error "--bitwidth requires a value"
+      OBLIV_SORT_W="$2"
       shift 2
       ;;
     -o|--outdir)
@@ -84,7 +91,9 @@ done
 
 [[ -x "${CBMC_GC_BIN}" ]] || error "cbmc-gc binary not found or not executable: ${CBMC_GC_BIN}"
 [[ "${OBLIV_SORT_N}" =~ ^[0-9]+$ ]] || error "OBLIV_SORT_N must be a positive integer"
+[[ "${OBLIV_SORT_W}" =~ ^[0-9]+$ ]] || error "OBLIV_SORT_W must be a positive integer"
 (( OBLIV_SORT_N > 0 )) || error "OBLIV_SORT_N must be greater than zero"
+(( OBLIV_SORT_W > 0 )) || error "OBLIV_SORT_W must be greater than zero"
 
 if (( (OBLIV_SORT_N & (OBLIV_SORT_N - 1)) != 0 )); then
   echo "Warning: OBLIV_SORT_N=${OBLIV_SORT_N} is not a power of two; bitonic sort expects a power of two." >&2
@@ -102,6 +111,7 @@ echo "== Generating circuit with cbmc-gc =="
 echo "Binary     : ${CBMC_GC_BIN}"
 echo "Out dir    : ${OUTDIR}"
 echo "Elements   : ${OBLIV_SORT_N}"
+echo "Bit-width  : ${OBLIV_SORT_W}"
 echo "Unwind bound: ${UNWIND}"
 if [[ "${NO_MINIMIZATION}" == "true" ]]; then
   echo "Minimization: DISABLED (will skip SAT-based equivalence check)"
@@ -117,6 +127,7 @@ CBMC_ARGS=(
   --unwind "${UNWIND}"
   --unwinding-assertions
   -DOBLIV_SORT_N="${OBLIV_SORT_N}"
+  -DOBLIV_SORT_W="${OBLIV_SORT_W}"
 )
 
 # Add minimization options
@@ -135,7 +146,10 @@ CBMC_ARGS+=("${EXTRA_CBMC_ARGS[@]}")
 CBMC_ARGS+=("${IMPL}" "${HARNESS}")
 
 set -x
-"${CBMC_GC_BIN}" "${CBMC_ARGS[@]}"
+# Run cbmc-gc with reduced console noise; full log goes to OUTDIR/cbmc_gc.log
+CBMC_LOG="${OUTDIR}/cbmc_gc.log"
+echo "cbmc-gc output will be saved to ${CBMC_LOG}"
+"${CBMC_GC_BIN}" "${CBMC_ARGS[@]}" >"${CBMC_LOG}" 2>&1
 set +x
 
 echo

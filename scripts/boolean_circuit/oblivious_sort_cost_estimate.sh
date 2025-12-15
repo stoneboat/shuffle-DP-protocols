@@ -4,11 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-NPARTS=8196
+NPARTS=128
 UNWIND_OVERRIDE=""
 KAHIP_GAMMA=0.10
 KAHIP_SEED=2
-ELEMENT_BITWIDTH=32
+ELEMENT_BITWIDTH="${ELEMENT_BITWIDTH:-32}"
 OUTDIR=""
 OUT_TAG=""
 PY_ENV_PREFIX="${PY_ENV_PREFIX:-/tmp/python-venv/ARE_venv}"
@@ -51,6 +51,11 @@ while [[ $# -gt 0 ]]; do
     -p|--parts)
       [[ $# -ge 2 ]] || error "--parts requires a value"
       NPARTS="$2"
+      shift 2
+      ;;
+    -w|--bitwidth)
+      [[ $# -ge 2 ]] || error "--bitwidth requires a value"
+      ELEMENT_BITWIDTH="$2"
       shift 2
       ;;
     -g|--gamma)
@@ -98,7 +103,7 @@ if [[ -z "${UNWIND}" ]]; then
 fi
 
 if [[ -z "${OUT_TAG}" ]]; then
-  OUT_TAG="oblivious_sort_u32_N${NPARTS}"
+  OUT_TAG="oblivious_sort_u${ELEMENT_BITWIDTH}_N${NPARTS}"
 fi
 
 if [[ -z "${OUTDIR}" ]]; then
@@ -117,7 +122,8 @@ source "${ENV_SCRIPT}"
 echo "[2/3] Generating circuit for n=${NPARTS}, unwind=${UNWIND} -> ${OUTDIR}"
 (
   cd "${REPO_ROOT}"
-  "${GEN_SCRIPT}" -n "${NPARTS}" --unwind "${UNWIND}" --no-minimization -o "${OUTDIR}"
+  OBLIV_SORT_W="${ELEMENT_BITWIDTH}" \
+  "${GEN_SCRIPT}" -n "${NPARTS}" -w "${ELEMENT_BITWIDTH}" --unwind "${UNWIND}" --no-minimization -o "${OUTDIR}"
 )
 
 GATE_FILE="${OUTDIR}/output.gate.txt"
