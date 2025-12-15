@@ -36,7 +36,8 @@ def _project_paths() -> Tuple[str, str, str, str]:
     project_dir = os.path.abspath(os.path.join(script_dir, "..", ".."))
     src_dir = os.path.join(project_dir, "src")
     fig_dir = os.path.join(project_dir, "fig")
-    data_dir = os.path.join(project_dir, "build")
+    # data_dir = os.path.join(project_dir, "build")
+    data_dir = os.path.join('/home/wei402/Desktop/wei402_scratch/are_data', 'build')
     return project_dir, src_dir, fig_dir, data_dir
 
 
@@ -55,9 +56,20 @@ def _run_one(args: Tuple[int, str, str, str, str]) -> Tuple[float, float, float,
     print(f"[worker] nparts={nparts}, python_pid={os.getpid()}", flush=True)
 
     out_tag = f"{circuit_name}_u32_N{nparts}"
-    return compute_circuit_cost(
-        nparts, circuit_name, project_dir, scripts_dir, data_dir, out_tag
-    )
+
+    circut_args = {
+        "NPARTS": nparts,
+        "circuit_name": circuit_name,
+    }
+
+    dir_args = {
+        "project_dir": project_dir,
+        "scripts_dir": scripts_dir,
+        "data_dir": data_dir,
+        "out_tag": out_tag,
+    }
+
+    return compute_circuit_cost(circut_args, dir_args)
 
 
 def plot_oblivious_sort_costs(
@@ -86,7 +98,8 @@ def plot_oblivious_sort_costs(
         for nparts in nparts_list
     ]
 
-    max_workers = min(4, len(nparts_list)) or 1
+    max_workers = max(1, len(nparts_list))
+    max_workers = min(max_workers, 64)
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         results = list(executor.map(_run_one, worker_args))
 

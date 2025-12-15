@@ -24,7 +24,15 @@ def parse_stats_file(path: str):
 
     return client_comp, client_comm, baseline_comp, baseline_comm
 
-def compute_circuit_cost(NPARTS, circuit_name, project_dir, scripts_dir, data_dir, out_tag):
+def compute_circuit_cost(circut_args, dir_args):
+    project_dir = dir_args["project_dir"]
+    scripts_dir = dir_args["scripts_dir"]
+    data_dir = dir_args["data_dir"]
+    out_tag = dir_args["out_tag"]
+
+    NPARTS = circut_args["NPARTS"]
+    circuit_name = circut_args["circuit_name"]
+
     script = os.path.join(scripts_dir, "boolean_circuit", f"{circuit_name}_cost_estimate.sh")
 
     # Build output directory under data_dir/boolean_circuits following CIRCUIT_NAME_u{NPARTS}_N{NPARTS}
@@ -32,21 +40,34 @@ def compute_circuit_cost(NPARTS, circuit_name, project_dir, scripts_dir, data_di
     out_dir = os.path.join(data_dir, "boolean_circuits", out_tag)
     os.makedirs(os.path.join(data_dir, "boolean_circuits"), exist_ok=True)
 
-    start_time = time.time()
-    result = subprocess.run(
-        [
-            script,
-            "-p",
-            str(NPARTS),
-            "-o",
-            out_dir,
-        ],
-        cwd=project_dir,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    end_time = time.time()
+    assert circuit_name in ["oblivious_sort", "selection"], f"Invalid circuit name: {circuit_name}"
+
+    if circuit_name == "oblivious_sort":
+        start_time = time.time()
+        result = subprocess.run(
+            [
+                script,
+                "-p",
+                str(NPARTS),
+                "-o",
+                out_dir,
+            ],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        end_time = time.time()
+    elif circuit_name == "selection":
+        start_time = time.time()
+        result = subprocess.run(
+            [
+                script,
+                "-p",
+                str(NPARTS),
+            ],
+        )
+        end_time = time.time()
 
     print(f"Script execution time with NPARTS={NPARTS} and circuit name={circuit_name}: {end_time - start_time} seconds")
 
@@ -57,11 +78,12 @@ def compute_circuit_cost(NPARTS, circuit_name, project_dir, scripts_dir, data_di
         raise RuntimeError("Circuit cost estimation failed")
     else:
         # Read statistics from the generated stats file
-        stats_file = os.path.join(out_dir, "oblivious_sorting_stats.txt")
+        if circuit_name == "oblivious_sort":
+            stats_file = os.path.join(out_dir, "oblivious_sorting_stats.txt")
+        elif circuit_name == "selection":
+            stats_file = os.path.join(out_dir, "dp_selection_gumbel_stats.txt")
 
         if not os.path.exists(stats_file):
             raise FileNotFoundError(f"Stats file not found: {stats_file}")
-        else:
-            client_comp, client_comm, baseline_comp, baseline_comm = parse_stats_file(stats_file)
-            return client_comp, client_comm, baseline_comp, baseline_comm
-        
+        client_comp, client_comm, baseline_comp, baseline_comm = parse_stats_file(stats_file)
+        return client_comp, client_comm, baseline_comp, baseline_comm
