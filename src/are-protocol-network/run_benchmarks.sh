@@ -15,5 +15,5 @@ mkdir -p "$OUTPUT_DIR"
 CSV="${OUTPUT_DIR}/all_results.csv"
 
 echo "=== Running all benchmarks ==="
-./evaluator --benchmark --spawn-clients -o "$CSV"
+./bin/evaluator --benchmark --spawn-clients -o "$CSV"
 echo "Done. Results in $CSV"

@@ -18,3 +18,6 @@ dist/
 .idea
 src/utils/mcl
 src/utils/emp-tool
+src/are-protocol/bin/
+src/are-protocol-network/bin/
+*.bin

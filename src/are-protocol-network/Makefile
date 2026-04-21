@@ -2,6 +2,7 @@ MCL_DIR = ../utils/mcl
 EMP_DIR = ../utils/emp-tool/install
 SSL_DIR = /opt/homebrew/opt/openssl
 ARE_DIR = ../are-protocol
+BIN_DIR = bin
 
 CXX      = g++
 CXXFLAGS = -std=c++17 -O2 \
@@ -33,19 +34,23 @@ HEADERS = net_serialize.h \
           $(ARE_DIR)/circuits/build_distinct_elements_histogram.h
 
 TARGETS = evaluator client gen_tables
+BIN_TARGETS = $(addprefix $(BIN_DIR)/,$(TARGETS))
 
-all: $(TARGETS)
+all: $(BIN_TARGETS)
 
-evaluator: evaluator.cpp $(HEADERS)
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
+
+$(BIN_DIR)/evaluator: evaluator.cpp $(HEADERS) | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
 
-client: client.cpp $(HEADERS)
+$(BIN_DIR)/client: client.cpp $(HEADERS) | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
 
-gen_tables: gen_tables.cpp $(HEADERS)
+$(BIN_DIR)/gen_tables: gen_tables.cpp $(HEADERS) | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
 
 clean:
-	rm -f $(TARGETS)
+	rm -rf $(BIN_DIR) $(TARGETS)
 
 .PHONY: clean all

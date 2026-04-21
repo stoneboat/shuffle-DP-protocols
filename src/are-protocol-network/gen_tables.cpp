@@ -17,7 +17,7 @@
 #include <chrono>
 
 static void generateTable(int ell_A, const std::string& dir) {
-    std::string path = dir + "/lookup_" + std::to_string(ell_A) + ".bin";
+    std::string path = dir + "/bin/lookup_" + std::to_string(ell_A) + ".bin";
     std::cout << "Generating lookup table for ell_A=" << ell_A
               << " (" << (1 << ell_A) << " entries)..." << std::endl;
 

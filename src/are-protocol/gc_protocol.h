@@ -158,8 +158,16 @@ inline RunResult runProtocol(emp::BristolFormat* circ, int num_clients, bool bal
 
     StringOTARE ot_input(8, 4);
     PermXOTARE pxt_boundary(8, 4);
-    ot_input.Setup();
-    pxt_boundary.Setup();
+    ot_input.Setup(/*build_table=*/false);
+    if (!ot_input.LoadTable("lookup_12.bin")) {
+        std::cerr << "lookup_12.bin not found, building table..." << std::endl;
+        ot_input.Setup(/*build_table=*/true);
+    }
+    pxt_boundary.Setup(/*build_table=*/false);
+    if (!pxt_boundary.LoadTable("lookup_20.bin")) {
+        std::cerr << "lookup_20.bin not found, building table..." << std::endl;
+        pxt_boundary.Setup(/*build_table=*/true);
+    }
 
     const int total_inputs = circ->n1 + circ->n2;
     const int out_n        = circ->n3;
