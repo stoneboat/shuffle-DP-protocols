@@ -16,3 +16,5 @@ dist/
 *.pyzwz
 .claude
 .idea
+src/utils/mcl
+src/utils/emp-tool
