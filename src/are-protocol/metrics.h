@@ -37,6 +37,8 @@ struct RunResult {
     int circuit_gates;
     int bit_width = 0;
     bool balanced;
+    std::string partition_mode = "topo_bal"; // topo_bal | unbal | nonxor_bal | min_cut
+    int total_boundary_pins = 0;             // sum of |boundary_in[c]| across clients (cut_pin)
     std::vector<ClientMetrics> clients;
     double eval_time_us   = 0;
     double total_time_us  = 0;
@@ -73,7 +75,7 @@ struct RunResult {
 
 // CSV header
 static const char* CSV_HEADER =
-    "experiment,n_clients,circuit,circuit_gates,bit_width,balanced,client_id,"
+    "experiment,n_clients,circuit,circuit_gates,bit_width,balanced,partition_mode,total_boundary_pins,client_id,"
     "num_gates,num_and,num_inputs,num_boundary_in,num_boundary_out,"
     "garble_time_us,ot_are_time_us,boundary_time_us,total_time_us,"
     "garbled_table_bytes,ot_are_bytes,boundary_bytes,total_bytes";
@@ -85,6 +87,8 @@ static void writeCSVRow(std::ostream& out, const RunResult& r, const ClientMetri
         << r.circuit_gates << ","
         << r.bit_width << ","
         << (r.balanced ? 1 : 0) << ","
+        << r.partition_mode << ","
+        << r.total_boundary_pins << ","
         << c.client_id << ","
         << c.num_gates << ","
         << c.num_and_gates << ","
@@ -114,7 +118,8 @@ static void printSummary(const RunResult& r) {
               << "  N=" << r.n_clients
               << "  circuit=" << r.circuit_name
               << "  gates=" << r.circuit_gates
-              << "  balanced=" << r.balanced
+              << "  partition=" << r.partition_mode
+              << "  cut_pins=" << r.total_boundary_pins
               << "  correct=" << r.correct << "\n";
     std::cout << "  avg_time=" << r.avg_case_time() << " us"
               << "  avg_bytes=" << (size_t)r.avg_case_bytes()

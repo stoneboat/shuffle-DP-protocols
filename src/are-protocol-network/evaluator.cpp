@@ -18,12 +18,16 @@ struct Args {
     int T = -1, D = 2, K = 8;  // T=-1 means auto (T=N for treemech)
     int N_sort = -1; // -1 means auto (N_sort=N)
     int NB = 8;      // noise bits for selection
-    bool balanced = true;
+    bool balanced = true;        // legacy flag; mirrors partition_mode for back-compat
+    PartitionMode partition_mode = PART_TOPOLOGICAL_BALANCED;
+    bool partition_explicit = false; // true if --partition was passed
+    double gamma = 0.2;          // slack for non-XOR balance constraint (paper §7)
     std::string csv_file;
     std::string experiment; // custom experiment name for CSV
     bool verbose = true;
-    bool benchmark = false;   // run all circuit/N/balanced combos
+    bool benchmark = false;   // run all circuit/N/partition combos
     bool spawn_clients = false; // fork+exec client processes
+    bool circuit_explicit = false; // true if --circuit was passed
     std::string self_path;    // argv[0] for finding client binary
 };
 
@@ -33,12 +37,22 @@ static Args parseArgs(int argc, char** argv) {
         std::string arg = argv[i];
         if ((arg == "--clients" || arg == "-n") && i+1 < argc) a.num_clients = atoi(argv[++i]);
         else if ((arg == "--port" || arg == "-p") && i+1 < argc) a.base_port = atoi(argv[++i]);
-        else if ((arg == "--circuit" || arg == "-c") && i+1 < argc) a.circuit = argv[++i];
+        else if ((arg == "--circuit" || arg == "-c") && i+1 < argc) { a.circuit = argv[++i]; a.circuit_explicit = true; }
         else if (arg == "--T" && i+1 < argc) a.T = atoi(argv[++i]);
         else if (arg == "--D" && i+1 < argc) a.D = atoi(argv[++i]);
         else if (arg == "--K" && i+1 < argc) a.K = atoi(argv[++i]);
         else if (arg == "--NB" && i+1 < argc) a.NB = atoi(argv[++i]);
-        else if (arg == "--unbalanced") a.balanced = false;
+        else if (arg == "--unbalanced") {
+            a.balanced = false;
+            a.partition_mode = PART_UNBALANCED;
+            a.partition_explicit = true;
+        }
+        else if ((arg == "--partition" || arg == "--part") && i+1 < argc) {
+            a.partition_mode = parsePartitionMode(argv[++i]);
+            a.balanced = (a.partition_mode != PART_UNBALANCED);
+            a.partition_explicit = true;
+        }
+        else if (arg == "--gamma" && i+1 < argc) a.gamma = atof(argv[++i]);
         else if ((arg == "--csv" || arg == "-o") && i+1 < argc) a.csv_file = argv[++i];
         else if ((arg == "--exp" || arg == "-e") && i+1 < argc) a.experiment = argv[++i];
         else if (arg == "-q") a.verbose = false;
@@ -216,8 +230,9 @@ static RunResult runProtocol(const Args& args) {
         std::cout << "[Evaluator] Circuit: " << args.circuit<< "  gates=" << circ->num_gate<< "  inputs=" << (circ->n1 + circ->n2)<< "  outputs=" << circ->n3 << std::endl;
     }
 
-    // Compute partition
-    GlobalPartition gp = computePartition(circ, N, args.balanced);
+    // Compute partition (dispatched by --partition; legacy --unbalanced still
+    // works because parseArgs maps it to PART_UNBALANCED).
+    GlobalPartition gp = computePartitionByMode(circ, N, args.partition_mode, args.gamma);
 
     // Open N server connections
     if (args.verbose)
@@ -259,7 +274,7 @@ static RunResult runProtocol(const Args& args) {
     // Initialize ARE for decoding — load precomputed lookup table from disk
     StringOTARE ot_decode(8, 4);
     ot_decode.Setup(/*build_table=*/false);
-    if (!ot_decode.LoadTable("lookup_12.bin")) {
+    if (!ot_decode.LoadTable("bin/lookup_12.bin")) {
         std::cerr << "[Evaluator] lookup_12.bin not found, building table..." << std::endl;
         ot_decode.Setup(/*build_table=*/true);
     }
@@ -432,13 +447,15 @@ static RunResult runProtocol(const Args& args) {
 
     // ── Build RunResult ─────────────────────────────────────────────────────
     RunResult result;
-    std::string bal_str = args.balanced ? "_bal" : "_unbal";
-    result.experiment = args.experiment.empty()? ("net_" + args.circuit + "_N" + std::to_string(N) + bal_str): args.experiment;
+    std::string mode_tag = "_" + partitionModeName(args.partition_mode);
+    result.experiment = args.experiment.empty()? ("net_" + args.circuit + "_N" + std::to_string(N) + mode_tag): args.experiment;
     result.n_clients = N;
     result.circuit_name = args.circuit;
     result.circuit_gates = circ->num_gate;
     result.bit_width = args.K;
     result.balanced = args.balanced;
+    result.partition_mode = partitionModeName(args.partition_mode);
+    result.total_boundary_pins = totalBoundaryPins(gp);
     result.clients = all_metrics;
     result.eval_time_us = eval_us;
     result.correct = true;
@@ -463,30 +480,41 @@ int main(int argc, char** argv) {
     if (args.benchmark) {
         args.spawn_clients = true;
         std::vector<RunResult> all_results;
-        const std::vector<std::string> circuits = {"gausssum", "select", "lcb", "bitonic"};
+        const std::vector<std::string> circuits = args.circuit_explicit
+            ? std::vector<std::string>{args.circuit}
+            : std::vector<std::string>{"gausssum", "select", "lcb", "bitonic"};
         const std::vector<int> n_values = {2, 4, 8, 16, 32, 64};
+        // If --partition was explicit, only run that mode; otherwise sweep all.
+        const std::vector<PartitionMode> modes = args.partition_explicit
+            ? std::vector<PartitionMode>{args.partition_mode}
+            : std::vector<PartitionMode>{
+                  PART_TOPOLOGICAL_BALANCED,
+                  PART_UNBALANCED,
+                  PART_NONXOR_BALANCED,
+                  PART_MIN_CUT,
+              };
         int port = args.base_port;
 
-        // Partition modes: 0=balanced(topological), 1=unbalanced
         for (auto& circ : circuits) {
             for (int n : n_values) {
-                for (int mode = 0; mode < 2; mode++) {
+                for (PartitionMode mode : modes) {
                     Args ea = args;
                     ea.circuit = circ;
                     ea.num_clients = n;
-                    ea.balanced = (mode == 0);
+                    ea.partition_mode = mode;
+                    ea.balanced = (mode != PART_UNBALANCED);
                     ea.base_port = port;
                     ea.verbose = false;
 
-                    std::string mode_str = (mode == 0) ? "bal" : "unbal";
+                    std::string mode_str = partitionModeName(mode);
                     ea.experiment = "net_" + circ + "_N" + std::to_string(n) + "_" + mode_str;
                     std::cout << "=== Running: " << ea.experiment<< " port=" << port << " ===" << std::endl;
 
                     // Sample plaintext inputs (Gaussian for gausssum, Laplace
                     // for distinct, uniform for others) and slice per client.
                     emp::BristolFormat* preview_circ = buildCircuit(ea);
-                    GlobalPartition preview_gp = computePartition(preview_circ, n, ea.balanced);
-                    std::mt19937 sample_rng(2026 + 17 * n + mode);
+                    GlobalPartition preview_gp = computePartitionByMode(preview_circ, n, mode, ea.gamma);
+                    std::mt19937 sample_rng(2026 + 17 * n + (int)mode);
                     std::vector<int> all_bits = sampleInputBits(ea, preview_circ, sample_rng);
                     auto per_client_inputs = sliceInputsPerClient(all_bits, preview_gp);
                     delete preview_circ;

@@ -61,8 +61,12 @@ int main(int argc, char** argv) {
 
     PermXOTARE pxt_boundary(8, 4);
     pxt_boundary.Setup(/*build_table=*/false);
-    if (c > 0 && !pi.boundary_in.empty())
-        pxt_boundary.LoadTable("lookup_20.bin");
+    if (c > 0 && !pi.boundary_in.empty()) {
+        if (!pxt_boundary.LoadTable("bin/lookup_20.bin")) {
+            std::cerr << "[Client " << c << "] bin/lookup_20.bin not found, building table..." << std::endl;
+            pxt_boundary.Setup(/*build_table=*/true);
+        }
+    }
 
     int n_inputs = pi.inp_end - pi.inp_start;
     std::vector<emp::block> W0_inputs(n_inputs);

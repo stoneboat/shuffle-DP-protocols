@@ -4,6 +4,9 @@
 #include <vector>
 #include <set>
 #include <map>
+#include <string>
+#include <cmath>
+#include <algorithm>
 #include <cstring>
 #include <cassert>
 #include "ot/rabin_ot_are.h"
@@ -163,6 +166,312 @@ inline GlobalPartition computePartition(emp::BristolFormat* circ, int num_client
     }
 
     return gp;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Extended partition modes (paper §7: Definitions 7.1, 7.2, Problem 1)
+//
+// The original computePartition(circ, N, balanced) above is preserved and
+// remains the canonical "topologically balanced" / "all to client 0" splitter.
+// The functions below add three additional partition strategies that all keep
+// the contiguous gate-range structure (so the existing protocol still works):
+//
+//   PART_TOPOLOGICAL_BALANCED  — same as computePartition(circ, N, true)
+//   PART_UNBALANCED            — same as computePartition(circ, N, false)
+//   PART_NONXOR_BALANCED       — paper Def 7.2: equal Σ w(v) per client where
+//                                w(v) = 1[v is non-XOR/non-NOT gate] (i.e.,
+//                                AND-gate count balanced — the only gates
+//                                that produce garbled tables / dominate cost).
+//   PART_MIN_CUT               — paper Problem 1: among contiguous splits that
+//                                satisfy the (1+γ) non-XOR balance constraint,
+//                                pick cut points that minimize the pin-level
+//                                cut count (gate→gate edges crossing the cut).
+//
+// All modes use the same balanced (equal-size) input partitioning as the
+// original code so they inherit the same correctness profile.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PartitionMode {
+    PART_TOPOLOGICAL_BALANCED = 0,
+    PART_UNBALANCED           = 1,
+    PART_NONXOR_BALANCED      = 2,
+    PART_MIN_CUT              = 3,
+};
+
+inline std::string partitionModeName(PartitionMode m) {
+    switch (m) {
+        case PART_TOPOLOGICAL_BALANCED: return "topo_bal";
+        case PART_UNBALANCED:           return "unbal";
+        case PART_NONXOR_BALANCED:      return "nonxor_bal";
+        case PART_MIN_CUT:              return "min_cut";
+    }
+    return "unknown";
+}
+
+inline PartitionMode parsePartitionMode(const std::string& s) {
+    if (s == "topo_bal" || s == "balanced" || s == "bal" || s == "topo")
+        return PART_TOPOLOGICAL_BALANCED;
+    if (s == "unbal" || s == "unbalanced")
+        return PART_UNBALANCED;
+    if (s == "nonxor_bal" || s == "nonxor" || s == "and_bal")
+        return PART_NONXOR_BALANCED;
+    if (s == "min_cut" || s == "mincut" || s == "cut")
+        return PART_MIN_CUT;
+    return PART_TOPOLOGICAL_BALANCED;
+}
+
+// Fill GlobalPartition fields from explicit input/gate cut arrays. Mirrors the
+// boundary-detection logic of the original computePartition(): for each
+// consumer client c, it adds wires whose producer client is strictly less than
+// c. (The protocol's sequential structure relies on producer < consumer.)
+inline void fillGlobalPartitionFromCuts(GlobalPartition& gp,
+                                        emp::BristolFormat* circ,
+                                        const std::vector<int>& inp_start,
+                                        const std::vector<int>& inp_end,
+                                        const std::vector<int>& gate_start,
+                                        const std::vector<int>& gate_end) {
+    int num_clients = (int)inp_start.size();
+    gp.num_clients  = num_clients;
+    gp.total_inputs = circ->n1 + circ->n2;
+    gp.out_n        = circ->n3;
+    gp.out_base     = circ->num_wire - circ->n3;
+    gp.inp_start    = inp_start;
+    gp.inp_end      = inp_end;
+    gp.gate_start   = gate_start;
+    gp.gate_end     = gate_end;
+
+    gp.wire_partition.assign(circ->num_wire, -1);
+    for (int c = 0; c < num_clients; c++)
+        for (int w = inp_start[c]; w < inp_end[c]; w++)
+            gp.wire_partition[w] = c;
+    for (int c = 0; c < num_clients; c++)
+        for (int g = gate_start[c]; g < gate_end[c]; g++)
+            gp.wire_partition[circ->gates[4*g+2]] = c;
+
+    gp.boundary_in.assign(num_clients, {});
+    gp.boundary_out.assign(num_clients, {});
+    for (int c = 1; c < num_clients; c++) {
+        std::set<int> need;
+        for (int g = gate_start[c]; g < gate_end[c]; g++) {
+            int in0 = circ->gates[4*g+0], in1 = circ->gates[4*g+1];
+            if (gp.wire_partition[in0] >= 0 && gp.wire_partition[in0] < c) need.insert(in0);
+            if (gp.wire_partition[in1] >= 0 && gp.wire_partition[in1] < c) need.insert(in1);
+        }
+        for (int w : need) {
+            int producer = gp.wire_partition[w];
+            gp.boundary_in[c].push_back({w, producer});
+            gp.boundary_out[producer].push_back({w, c});
+        }
+    }
+
+    gp.output_wires.assign(num_clients, {});
+    for (int i = 0; i < gp.out_n; i++) {
+        int w = gp.out_base + i;
+        int owner = gp.wire_partition[w];
+        if (owner >= 0) gp.output_wires[owner].push_back(w);
+    }
+}
+
+// Equal-size input partition shared by all extended modes.
+inline void balancedInputCuts(int total_inputs, int num_clients,
+                              std::vector<int>& inp_start,
+                              std::vector<int>& inp_end) {
+    inp_start.assign(num_clients, 0);
+    inp_end.assign(num_clients, 0);
+    int base = total_inputs / num_clients, rem = total_inputs % num_clients;
+    inp_start[0] = 0;
+    for (int c = 0; c < num_clients; c++) {
+        inp_end[c] = inp_start[c] + base + (c < rem ? 1 : 0);
+        if (c + 1 < num_clients) inp_start[c+1] = inp_end[c];
+    }
+}
+
+// Paper Def 7.2: Balanced non-XOR weighted n-way partition.
+// Splits the topological gate sequence into N contiguous chunks with roughly
+// equal AND-gate (= non-XOR/non-NOT) counts.
+inline GlobalPartition computePartitionNonXOR(emp::BristolFormat* circ, int num_clients) {
+    GlobalPartition gp;
+    int total_inputs = circ->n1 + circ->n2;
+    int num_gate     = circ->num_gate;
+
+    std::vector<int> inp_start, inp_end;
+    balancedInputCuts(total_inputs, num_clients, inp_start, inp_end);
+
+    std::vector<int> gate_start(num_clients, 0), gate_end(num_clients, 0);
+
+    if (num_gate == 0 || num_clients == 1) {
+        gate_end[num_clients - 1] = num_gate;
+        fillGlobalPartitionFromCuts(gp, circ, inp_start, inp_end, gate_start, gate_end);
+        return gp;
+    }
+
+    // prefix_nonxor[g] = # of non-XOR/non-NOT gates in [0, g)
+    std::vector<int> prefix_nonxor(num_gate + 1, 0);
+    for (int g = 0; g < num_gate; g++) {
+        int type = circ->gates[4*g+3];
+        bool is_nonxor = (type != XOR_GATE && type != NOT_GATE);
+        prefix_nonxor[g+1] = prefix_nonxor[g] + (is_nonxor ? 1 : 0);
+    }
+    int total_nonxor = prefix_nonxor[num_gate];
+
+    // If there are no non-XOR gates at all, fall back to gate-count balance.
+    if (total_nonxor == 0) {
+        int base = num_gate / num_clients, rem = num_gate % num_clients;
+        gate_start[0] = 0;
+        for (int c = 0; c < num_clients; c++) {
+            gate_end[c] = gate_start[c] + base + (c < rem ? 1 : 0);
+            if (c + 1 < num_clients) gate_start[c+1] = gate_end[c];
+        }
+        fillGlobalPartitionFromCuts(gp, circ, inp_start, inp_end, gate_start, gate_end);
+        return gp;
+    }
+
+    gate_start[0] = 0;
+    for (int c = 0; c < num_clients; c++) {
+        if (c == num_clients - 1) {
+            gate_end[c] = num_gate;
+        } else {
+            int target = (int)std::round((double)(c+1) * total_nonxor / num_clients);
+            // smallest p with prefix_nonxor[p] >= target
+            auto it = std::lower_bound(prefix_nonxor.begin() + gate_start[c],
+                                       prefix_nonxor.end(), target);
+            int p = (int)(it - prefix_nonxor.begin());
+            // Ensure each remaining client gets at least one gate.
+            int min_p = gate_start[c] + 1;
+            int max_p = num_gate - (num_clients - 1 - c);
+            if (p < min_p) p = min_p;
+            if (p > max_p) p = max_p;
+            gate_end[c] = p;
+            gate_start[c+1] = p;
+        }
+    }
+
+    fillGlobalPartitionFromCuts(gp, circ, inp_start, inp_end, gate_start, gate_end);
+    return gp;
+}
+
+// Paper Problem 1: Balanced non-XOR min-cut partitioning.
+// Among contiguous gate splits that satisfy non-XOR (1+γ)/n balance, pick the
+// cut points that minimize cut_pin = #{gate→gate edges crossing a cut}.
+//
+// Heuristic: for each cut c, find the gate-index window [p_lo, p_hi] whose
+// prefix non-XOR count lies within tol = γ·W_tot/(2n) of the target, then pick
+// the position in that window with the fewest crossings.
+inline GlobalPartition computePartitionMinCut(emp::BristolFormat* circ, int num_clients,
+                                              double gamma = 0.2) {
+    GlobalPartition gp;
+    int total_inputs = circ->n1 + circ->n2;
+    int num_gate     = circ->num_gate;
+
+    std::vector<int> inp_start, inp_end;
+    balancedInputCuts(total_inputs, num_clients, inp_start, inp_end);
+
+    std::vector<int> gate_start(num_clients, 0), gate_end(num_clients, 0);
+
+    if (num_gate == 0 || num_clients == 1) {
+        gate_end[num_clients - 1] = num_gate;
+        fillGlobalPartitionFromCuts(gp, circ, inp_start, inp_end, gate_start, gate_end);
+        return gp;
+    }
+
+    // wire_producer[w] = gate index that outputs w (or -1 for input wires).
+    std::vector<int> wire_producer(circ->num_wire, -1);
+    for (int g = 0; g < num_gate; g++)
+        wire_producer[circ->gates[4*g+2]] = g;
+
+    // crossings[p] = # of gate→gate edges (u → v) with u < p ≤ v.
+    // Each such edge contributes +1 to crossings[p] for p ∈ {u+1, ..., v}.
+    // Use a difference array, then prefix sum.
+    std::vector<int> diff(num_gate + 2, 0);
+    for (int v = 0; v < num_gate; v++) {
+        int in0 = circ->gates[4*v+0], in1 = circ->gates[4*v+1];
+        int t   = circ->gates[4*v+3];
+        int u0 = wire_producer[in0];
+        if (u0 >= 0 && u0 < v) { diff[u0+1] += 1; diff[v+1] -= 1; }
+        if (t != NOT_GATE) {
+            int u1 = wire_producer[in1];
+            if (u1 >= 0 && u1 < v) { diff[u1+1] += 1; diff[v+1] -= 1; }
+        }
+    }
+    std::vector<int> crossings(num_gate + 2, 0);
+    int run = 0;
+    for (int p = 0; p <= num_gate + 1; p++) { run += diff[p]; crossings[p] = run; }
+
+    // Non-XOR prefix.
+    std::vector<int> prefix_nonxor(num_gate + 1, 0);
+    for (int g = 0; g < num_gate; g++) {
+        int type = circ->gates[4*g+3];
+        bool is_nonxor = (type != XOR_GATE && type != NOT_GATE);
+        prefix_nonxor[g+1] = prefix_nonxor[g] + (is_nonxor ? 1 : 0);
+    }
+    int total_nonxor = prefix_nonxor[num_gate];
+
+    // If there are no non-XOR gates, balance by gate count instead.
+    int weight_unit = (total_nonxor > 0) ? 1 : 0;
+    std::vector<int>& prefix_w = prefix_nonxor;
+    int total_w = total_nonxor;
+    std::vector<int> prefix_count;
+    if (weight_unit == 0) {
+        prefix_count.resize(num_gate + 1);
+        for (int g = 0; g <= num_gate; g++) prefix_count[g] = g;
+        prefix_w = prefix_count;
+        total_w = num_gate;
+    }
+
+    gate_start[0] = 0;
+    for (int c = 0; c < num_clients - 1; c++) {
+        double target = (double)(c+1) * total_w / num_clients;
+        double tol    = gamma * total_w / (2.0 * num_clients);
+        int lo_target = std::max(0, (int)std::ceil(target - tol));
+        int hi_target = (int)std::floor(target + tol);
+        // Window must cover at least one feasible position.
+        if (hi_target < lo_target) hi_target = lo_target;
+
+        int seg_lo = gate_start[c] + 1;
+        int seg_hi = num_gate - (num_clients - 1 - c);
+        if (seg_hi < seg_lo) seg_hi = seg_lo;
+
+        // Find p range where prefix_w[p] ∈ [lo_target, hi_target].
+        auto it_lo = std::lower_bound(prefix_w.begin() + seg_lo, prefix_w.begin() + seg_hi + 1, lo_target);
+        auto it_hi = std::upper_bound(prefix_w.begin() + seg_lo, prefix_w.begin() + seg_hi + 1, hi_target);
+        int p_lo = (int)(it_lo - prefix_w.begin());
+        int p_hi = (int)(it_hi - prefix_w.begin()) - 1;
+        if (p_lo < seg_lo) p_lo = seg_lo;
+        if (p_hi > seg_hi) p_hi = seg_hi;
+        if (p_hi < p_lo) p_hi = p_lo;
+
+        // Pick p ∈ [p_lo, p_hi] minimising crossings[p].
+        int best_p = p_lo, best_cr = crossings[p_lo];
+        for (int p = p_lo + 1; p <= p_hi; p++) {
+            if (crossings[p] < best_cr) { best_cr = crossings[p]; best_p = p; }
+        }
+        gate_end[c] = best_p;
+        gate_start[c+1] = best_p;
+    }
+    gate_end[num_clients - 1] = num_gate;
+
+    fillGlobalPartitionFromCuts(gp, circ, inp_start, inp_end, gate_start, gate_end);
+    return gp;
+}
+
+// Unified dispatch.
+inline GlobalPartition computePartitionByMode(emp::BristolFormat* circ, int num_clients,
+                                              PartitionMode mode, double gamma = 0.2) {
+    switch (mode) {
+        case PART_TOPOLOGICAL_BALANCED: return computePartition(circ, num_clients, true);
+        case PART_UNBALANCED:           return computePartition(circ, num_clients, false);
+        case PART_NONXOR_BALANCED:      return computePartitionNonXOR(circ, num_clients);
+        case PART_MIN_CUT:              return computePartitionMinCut(circ, num_clients, gamma);
+    }
+    return computePartition(circ, num_clients, true);
+}
+
+// Sum of |boundary_in[c]| across clients — pin-level cut count (paper notation
+// cut_pin(π)). Useful as a partition-quality metric to record in CSV.
+inline int totalBoundaryPins(const GlobalPartition& gp) {
+    int s = 0;
+    for (auto& v : gp.boundary_in) s += (int)v.size();
+    return s;
 }
 
 inline PartitionInfo makePartitionInfo(const GlobalPartition& gp, emp::BristolFormat* circ, int c) {
