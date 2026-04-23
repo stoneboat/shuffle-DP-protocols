@@ -1,21 +1,26 @@
-MCL_DIR = ../utils/mcl
-EMP_DIR = ../utils/emp-tool/install
-SSL_DIR = /opt/homebrew/opt/openssl
-ARE_DIR = ../are-protocol
+BASE_DIR = $(shell cd .. && pwd)
+
+MCL_DIR  = $(BASE_DIR)/utils/mcl/install
+EMP_DIR  = $(BASE_DIR)/utils/emp-tool/install
+ARE_DIR  = $(BASE_DIR)/are-protocol
 BIN_DIR = bin
 
 CXX      = g++
+# CHANGED: -I$(EMP_DIR) instead of -I$(EMP_DIR)/include
+# REMOVED: SSL_DIR include (not needed on most Linux clusters)
 CXXFLAGS = -std=c++17 -O2 \
            -I. -I$(ARE_DIR) -I$(ARE_DIR)/ot \
            -I$(MCL_DIR)/include \
            -I$(EMP_DIR)/include \
-           -I$(SSL_DIR)/include \
-           -maes -mpclmul
+           -march=native -maes -mpclmul -mssse3
 
+# Use abspath to ensure the linker finds the absolute path for the rpath
 EMP_RPATH = -Wl,-rpath,$(abspath $(EMP_DIR)/lib)
+
+# REMOVED: -L$(SSL_DIR)/lib
 LDFLAGS   = $(MCL_DIR)/lib/libmcl.a \
             -L$(EMP_DIR)/lib -lemp-tool $(EMP_RPATH) \
-            -L$(SSL_DIR)/lib -lcrypto
+            -lcrypto -lpthread
 
 HEADERS = net_serialize.h \
           $(ARE_DIR)/gc_protocol.h \
@@ -51,6 +56,6 @@ $(BIN_DIR)/gen_tables: gen_tables.cpp $(HEADERS) | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
 
 clean:
-	rm -rf $(BIN_DIR) $(TARGETS)
+	rm -rf $(BIN_DIR)
 
 .PHONY: clean all
