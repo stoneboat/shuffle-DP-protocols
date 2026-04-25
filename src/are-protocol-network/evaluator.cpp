@@ -492,6 +492,7 @@ int main(int argc, char** argv) {
                   PART_UNBALANCED,
                   PART_NONXOR_BALANCED,
                   PART_MIN_CUT,
+                  PART_MIN_MAX_IN,
               };
         int port = args.base_port;
 

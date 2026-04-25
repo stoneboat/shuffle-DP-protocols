@@ -196,6 +196,7 @@ enum PartitionMode {
     PART_UNBALANCED           = 1,
     PART_NONXOR_BALANCED      = 2,
     PART_MIN_CUT              = 3,
+    PART_MIN_MAX_IN           = 4,
 };
 
 inline std::string partitionModeName(PartitionMode m) {
@@ -204,6 +205,7 @@ inline std::string partitionModeName(PartitionMode m) {
         case PART_UNBALANCED:           return "unbal";
         case PART_NONXOR_BALANCED:      return "nonxor_bal";
         case PART_MIN_CUT:              return "min_cut";
+        case PART_MIN_MAX_IN:           return "min_max_in";
     }
     return "unknown";
 }
@@ -217,6 +219,8 @@ inline PartitionMode parsePartitionMode(const std::string& s) {
         return PART_NONXOR_BALANCED;
     if (s == "min_cut" || s == "mincut" || s == "cut")
         return PART_MIN_CUT;
+    if (s == "min_max_in" || s == "minmax_in" || s == "minmax" || s == "min_max" || s == "mmi")
+        return PART_MIN_MAX_IN;
     return PART_TOPOLOGICAL_BALANCED;
 }
 
@@ -454,6 +458,161 @@ inline GlobalPartition computePartitionMinCut(emp::BristolFormat* circ, int num_
     return gp;
 }
 
+// Paper Problem 2 (with μ_in instead of μ_out): Balanced non-XOR min-max
+// boundary partitioning. Among contiguous gate splits satisfying (1+γ)/n
+// non-XOR balance, pick cut points that minimise max_c |boundary_in[c]| —
+// the worst-client incoming pin count, which is the per-step bottleneck
+// for the sequential ARE protocol.
+//
+// The paper formulates the problem with outgoing boundary μ_out; we use μ_in
+// because in this protocol each client waits on incoming OT-ARE work, so
+// max_c |boundary_in[c]| is what dictates the critical path. Both share the
+// same overall structure (each cross-edge has one producer and one consumer).
+//
+// Algorithm: warm-start from computePartitionMinCut, then sequential
+// per-cut hill-climb. For each cut c (boundary between client c-1 and c),
+// enumerate a small set of candidate positions inside its (1+γ)/n feasibility
+// window — the current position, both endpoints, and a uniformly-spaced
+// interior — recompute per-client boundary_in counts, and accept the position
+// minimising the global max. Sweep cuts repeatedly until no cut improves.
+inline GlobalPartition computePartitionMinMaxBoundary(emp::BristolFormat* circ, int num_clients,
+                                                      double gamma = 0.2) {
+    GlobalPartition gp = computePartitionMinCut(circ, num_clients, gamma);
+    if (num_clients <= 1 || circ->num_gate == 0) return gp;
+
+    int num_gate = circ->num_gate;
+
+    // prefix non-XOR for feasibility windows (mirrors min-cut / non-XOR modes)
+    std::vector<int> prefix_nonxor(num_gate + 1, 0);
+    for (int g = 0; g < num_gate; g++) {
+        int type = circ->gates[4*g+3];
+        bool is_nonxor = (type != XOR_GATE && type != NOT_GATE);
+        prefix_nonxor[g+1] = prefix_nonxor[g] + (is_nonxor ? 1 : 0);
+    }
+    int total_nonxor = prefix_nonxor[num_gate];
+    std::vector<int> prefix_count;
+    std::vector<int>* prefix_w_ptr = &prefix_nonxor;
+    int total_w = total_nonxor;
+    if (total_nonxor == 0) {
+        prefix_count.resize(num_gate + 1);
+        for (int g = 0; g <= num_gate; g++) prefix_count[g] = g;
+        prefix_w_ptr = &prefix_count;
+        total_w = num_gate;
+    }
+    std::vector<int>& prefix_w = *prefix_w_ptr;
+
+    std::vector<int> gate_start = gp.gate_start;
+    std::vector<int> gate_end   = gp.gate_end;
+    const std::vector<int>& inp_start = gp.inp_start;
+    const std::vector<int>& inp_end   = gp.inp_end;
+
+    auto recomputeBoundaryIn = [&](const std::vector<int>& gs,
+                                   const std::vector<int>& ge) -> std::vector<int> {
+        std::vector<int> wp(circ->num_wire, -1);
+        for (int c = 0; c < num_clients; c++)
+            for (int w = inp_start[c]; w < inp_end[c]; w++) wp[w] = c;
+        for (int c = 0; c < num_clients; c++)
+            for (int g = gs[c]; g < ge[c]; g++) wp[circ->gates[4*g+2]] = c;
+
+        std::vector<int> counts(num_clients, 0);
+        std::vector<int> last_seen(circ->num_wire, -1);
+        for (int c = 1; c < num_clients; c++) {
+            for (int g = gs[c]; g < ge[c]; g++) {
+                int in0 = circ->gates[4*g+0];
+                int in1 = circ->gates[4*g+1];
+                int t   = circ->gates[4*g+3];
+                if (wp[in0] >= 0 && wp[in0] < c && last_seen[in0] != c) {
+                    last_seen[in0] = c; counts[c]++;
+                }
+                if (t != NOT_GATE && wp[in1] >= 0 && wp[in1] < c && last_seen[in1] != c) {
+                    last_seen[in1] = c; counts[c]++;
+                }
+            }
+        }
+        return counts;
+    };
+
+    auto windowForCut = [&](int c, const std::vector<int>& gs) -> std::pair<int,int> {
+        // Cut c is the boundary between client c-1 and c (gate_end[c-1]==gate_start[c]).
+        double target = (double)c * total_w / num_clients;
+        double tol    = gamma * total_w / (2.0 * num_clients);
+        int lo_target = std::max(0, (int)std::ceil(target - tol));
+        int hi_target = (int)std::floor(target + tol);
+        if (hi_target < lo_target) hi_target = lo_target;
+
+        int seg_lo = gs[c-1] + 1;                   // ≥1 gate for client c-1
+        int seg_hi = num_gate - (num_clients - c);  // ≥1 gate per remaining client
+        if (seg_hi < seg_lo) seg_hi = seg_lo;
+
+        auto it_lo = std::lower_bound(prefix_w.begin() + seg_lo,
+                                      prefix_w.begin() + seg_hi + 1, lo_target);
+        auto it_hi = std::upper_bound(prefix_w.begin() + seg_lo,
+                                      prefix_w.begin() + seg_hi + 1, hi_target);
+        int p_lo = (int)(it_lo - prefix_w.begin());
+        int p_hi = (int)(it_hi - prefix_w.begin()) - 1;
+        if (p_lo < seg_lo) p_lo = seg_lo;
+        if (p_hi > seg_hi) p_hi = seg_hi;
+        if (p_hi < p_lo) p_hi = p_lo;
+        return {p_lo, p_hi};
+    };
+
+    auto vecMax = [](const std::vector<int>& v) {
+        int m = 0; for (int x : v) if (x > m) m = x; return m;
+    };
+
+    std::vector<int> cur_counts = recomputeBoundaryIn(gate_start, gate_end);
+    int cur_max = vecMax(cur_counts);
+
+    const int max_passes           = 6;
+    const int interior_candidates  = 10;
+
+    for (int pass = 0; pass < max_passes; pass++) {
+        bool improved = false;
+        for (int c = 1; c < num_clients; c++) {
+            auto [p_lo, p_hi] = windowForCut(c, gate_start);
+            int cur_p = gate_start[c];
+
+            std::vector<int> cands = {cur_p, p_lo, p_hi};
+            int span = p_hi - p_lo;
+            if (span > 0) {
+                int step = std::max(1, span / std::max(1, interior_candidates));
+                for (int p = p_lo; p <= p_hi; p += step) cands.push_back(p);
+            }
+            std::sort(cands.begin(), cands.end());
+            cands.erase(std::unique(cands.begin(), cands.end()), cands.end());
+
+            int best_p   = cur_p;
+            int best_max = cur_max;
+            std::vector<int> best_counts = cur_counts;
+            for (int p : cands) {
+                if (p == cur_p) continue;
+                std::vector<int> gs = gate_start, ge = gate_end;
+                gs[c]   = p;
+                ge[c-1] = p;
+                std::vector<int> cnts = recomputeBoundaryIn(gs, ge);
+                int m = vecMax(cnts);
+                if (m < best_max) {
+                    best_max    = m;
+                    best_p      = p;
+                    best_counts = std::move(cnts);
+                }
+            }
+            if (best_p != cur_p) {
+                gate_end[c-1] = best_p;
+                gate_start[c] = best_p;
+                cur_counts    = std::move(best_counts);
+                cur_max       = best_max;
+                improved = true;
+            }
+        }
+        if (!improved) break;
+    }
+
+    GlobalPartition out;
+    fillGlobalPartitionFromCuts(out, circ, inp_start, inp_end, gate_start, gate_end);
+    return out;
+}
+
 // Unified dispatch.
 inline GlobalPartition computePartitionByMode(emp::BristolFormat* circ, int num_clients,
                                               PartitionMode mode, double gamma = 0.2) {
@@ -462,6 +621,7 @@ inline GlobalPartition computePartitionByMode(emp::BristolFormat* circ, int num_
         case PART_UNBALANCED:           return computePartition(circ, num_clients, false);
         case PART_NONXOR_BALANCED:      return computePartitionNonXOR(circ, num_clients);
         case PART_MIN_CUT:              return computePartitionMinCut(circ, num_clients, gamma);
+        case PART_MIN_MAX_IN:           return computePartitionMinMaxBoundary(circ, num_clients, gamma);
     }
     return computePartition(circ, num_clients, true);
 }
