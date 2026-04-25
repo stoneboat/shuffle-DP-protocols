@@ -62,9 +62,14 @@ int main(int argc, char** argv) {
     PermXOTARE pxt_boundary(8, 4);
     pxt_boundary.Setup(/*build_table=*/false);
     if (c > 0 && !pi.boundary_in.empty()) {
-        if (!pxt_boundary.LoadTable("bin/lookup_20.bin")) {
-            std::cerr << "[Client " << c << "] bin/lookup_20.bin not found, building table..." << std::endl;
-            pxt_boundary.Setup(/*build_table=*/true);
+        // Prefer mmap-shared file: at large N, every client process duplicating
+        // the ell_A=20 table (~420 MB heap) is what OOMs the node. With the
+        // .mmap.bin file, the kernel page cache keeps one copy host-wide.
+        if (!pxt_boundary.LoadTableMmap("bin/lookup_20.mmap.bin")) {
+            if (!pxt_boundary.LoadTable("bin/lookup_20.bin")) {
+                std::cerr << "[Client " << c << "] bin/lookup_20 table not found, building..." << std::endl;
+                pxt_boundary.Setup(/*build_table=*/true);
+            }
         }
     }
 

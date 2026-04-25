@@ -57,6 +57,13 @@ public:
     // Load a precomputed lookup table from disk (call after Setup(false))
     bool LoadTable(const std::string& path) { return rabin_ot.LoadLookupTable(path); }
     bool SaveTable(const std::string& path) const { return rabin_ot.SaveLookupTable(path); }
+    // Mmap-shared variants — kernel page cache shares one copy across all
+    // client processes on the host instead of duplicating per-process.
+    bool LoadTableMmap(const std::string& path) { return rabin_ot.LoadLookupTableMmap(path); }
+    bool SaveTableMmap(const std::string& path) const { return rabin_ot.SaveLookupTableMmap(path); }
+    void LoadOrBuild(const std::string& mmap_path, const std::string& legacy_path) {
+        rabin_ot.LoadOrBuild(mmap_path, legacy_path);
+    }
 
     int getMsgLen() const { return msg_len; }
     int getEllA() const { return rabin_ot.getEllA(); }

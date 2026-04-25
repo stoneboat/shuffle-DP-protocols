@@ -67,6 +67,11 @@ public:
     void Setup(bool build_table = true) { ot.Setup(build_table); }
     bool LoadTable(const std::string& path) { return ot.LoadTable(path); }
     bool SaveTable(const std::string& path) const { return ot.SaveTable(path); }
+    bool LoadTableMmap(const std::string& path) { return ot.LoadTableMmap(path); }
+    bool SaveTableMmap(const std::string& path) const { return ot.SaveTableMmap(path); }
+    void LoadOrBuild(const std::string& mmap_path, const std::string& legacy_path) {
+        ot.LoadOrBuild(mmap_path, legacy_path);
+    }
     int getEllA() const { return ot.getEllA(); }
 
     // Party 0 (garbler / boundary wire owner):

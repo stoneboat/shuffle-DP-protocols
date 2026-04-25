@@ -158,15 +158,22 @@ inline RunResult runProtocol(emp::BristolFormat* circ, int num_clients, bool bal
 
     StringOTARE ot_input(8, 4);
     PermXOTARE pxt_boundary(8, 4);
+    // Prefer mmap-shared lookup files: at large N, every client process
+    // duplicating the ell_A=20 table (~420 MB) on its own heap is what OOMs
+    // the node. With the .mmap.bin file the kernel keeps one shared copy.
     ot_input.Setup(/*build_table=*/false);
-    if (!ot_input.LoadTable("bin/lookup_12.bin")) {
-        std::cerr << "bin/lookup_12.bin not found, building table..." << std::endl;
-        ot_input.Setup(/*build_table=*/true);
+    if (!ot_input.LoadTableMmap("bin/lookup_12.mmap.bin")) {
+        if (!ot_input.LoadTable("bin/lookup_12.bin")) {
+            std::cerr << "bin/lookup_12 table not found, building..." << std::endl;
+            ot_input.Setup(/*build_table=*/true);
+        }
     }
     pxt_boundary.Setup(/*build_table=*/false);
-    if (!pxt_boundary.LoadTable("bin/lookup_20.bin")) {
-        std::cerr << "bin/lookup_20.bin not found, building table..." << std::endl;
-        pxt_boundary.Setup(/*build_table=*/true);
+    if (!pxt_boundary.LoadTableMmap("bin/lookup_20.mmap.bin")) {
+        if (!pxt_boundary.LoadTable("bin/lookup_20.bin")) {
+            std::cerr << "bin/lookup_20 table not found, building..." << std::endl;
+            pxt_boundary.Setup(/*build_table=*/true);
+        }
     }
 
     const int total_inputs = circ->n1 + circ->n2;

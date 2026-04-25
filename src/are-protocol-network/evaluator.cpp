@@ -271,12 +271,16 @@ static RunResult runProtocol(const Args& args) {
     std::map<int, OTWireEncs> ot_encs;
     std::vector<ClientMetrics> all_metrics(N);
 
-    // Initialize ARE for decoding — load precomputed lookup table from disk
+    // Initialize ARE for decoding — prefer mmap-shared file (one copy across
+    // all client processes via the kernel page cache), fall back to legacy
+    // heap-loaded file, then to building from scratch.
     StringOTARE ot_decode(8, 4);
     ot_decode.Setup(/*build_table=*/false);
-    if (!ot_decode.LoadTable("bin/lookup_12.bin")) {
-        std::cerr << "[Evaluator] lookup_12.bin not found, building table..." << std::endl;
-        ot_decode.Setup(/*build_table=*/true);
+    if (!ot_decode.LoadTableMmap("bin/lookup_12.mmap.bin")) {
+        if (!ot_decode.LoadTable("bin/lookup_12.bin")) {
+            std::cerr << "[Evaluator] lookup_12 table not found, building..." << std::endl;
+            ot_decode.Setup(/*build_table=*/true);
+        }
     }
 
     for (int c = 0; c < N; c++) {
