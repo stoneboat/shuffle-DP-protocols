@@ -224,10 +224,6 @@ inline PartitionMode parsePartitionMode(const std::string& s) {
     return PART_TOPOLOGICAL_BALANCED;
 }
 
-// Fill GlobalPartition fields from explicit input/gate cut arrays. Mirrors the
-// boundary-detection logic of the original computePartition(): for each
-// consumer client c, it adds wires whose producer client is strictly less than
-// c. (The protocol's sequential structure relies on producer < consumer.)
 inline void fillGlobalPartitionFromCuts(GlobalPartition& gp,
                                         emp::BristolFormat* circ,
                                         const std::vector<int>& inp_start,
@@ -291,8 +287,6 @@ inline void balancedInputCuts(int total_inputs, int num_clients,
 }
 
 // Paper Def 7.2: Balanced non-XOR weighted n-way partition.
-// Splits the topological gate sequence into N contiguous chunks with roughly
-// equal AND-gate (= non-XOR/non-NOT) counts.
 inline GlobalPartition computePartitionNonXOR(emp::BristolFormat* circ, int num_clients) {
     GlobalPartition gp;
     int total_inputs = circ->n1 + circ->n2;
@@ -357,10 +351,6 @@ inline GlobalPartition computePartitionNonXOR(emp::BristolFormat* circ, int num_
 // Paper Problem 1: Balanced non-XOR min-cut partitioning.
 // Among contiguous gate splits that satisfy non-XOR (1+γ)/n balance, pick the
 // cut points that minimize cut_pin = #{gate→gate edges crossing a cut}.
-//
-// Heuristic: for each cut c, find the gate-index window [p_lo, p_hi] whose
-// prefix non-XOR count lies within tol = γ·W_tot/(2n) of the target, then pick
-// the position in that window with the fewest crossings.
 inline GlobalPartition computePartitionMinCut(emp::BristolFormat* circ, int num_clients,
                                               double gamma = 0.2) {
     GlobalPartition gp;
@@ -458,25 +448,9 @@ inline GlobalPartition computePartitionMinCut(emp::BristolFormat* circ, int num_
     return gp;
 }
 
-// Paper Problem 2 (with μ_in instead of μ_out): Balanced non-XOR min-max
-// boundary partitioning. Among contiguous gate splits satisfying (1+γ)/n
-// non-XOR balance, pick cut points that minimise max_c |boundary_in[c]| —
-// the worst-client incoming pin count, which is the per-step bottleneck
-// for the sequential ARE protocol.
-//
-// The paper formulates the problem with outgoing boundary μ_out; we use μ_in
-// because in this protocol each client waits on incoming OT-ARE work, so
-// max_c |boundary_in[c]| is what dictates the critical path. Both share the
-// same overall structure (each cross-edge has one producer and one consumer).
-//
-// Algorithm: warm-start from computePartitionMinCut, then sequential
-// per-cut hill-climb. For each cut c (boundary between client c-1 and c),
-// enumerate a small set of candidate positions inside its (1+γ)/n feasibility
-// window — the current position, both endpoints, and a uniformly-spaced
-// interior — recompute per-client boundary_in counts, and accept the position
-// minimising the global max. Sweep cuts repeatedly until no cut improves.
-inline GlobalPartition computePartitionMinMaxBoundary(emp::BristolFormat* circ, int num_clients,
-                                                      double gamma = 0.2) {
+// Paper Problem 2 (with μ_in instead of μ_out): Balanced non-XOR min-max boundary partitioning.
+// Among contiguous gate splits satisfying (1+γ)/n= non-XOR balance, pick cut points that minimise max_c |boundary_in[c]| — the worst-client incoming pin count
+inline GlobalPartition computePartitionMinMaxBoundary(emp::BristolFormat* circ, int num_clients, double gamma = 0.2) {
     GlobalPartition gp = computePartitionMinCut(circ, num_clients, gamma);
     if (num_clients <= 1 || circ->num_gate == 0) return gp;
 
@@ -614,8 +588,7 @@ inline GlobalPartition computePartitionMinMaxBoundary(emp::BristolFormat* circ, 
 }
 
 // Unified dispatch.
-inline GlobalPartition computePartitionByMode(emp::BristolFormat* circ, int num_clients,
-                                              PartitionMode mode, double gamma = 0.2) {
+inline GlobalPartition computePartitionByMode(emp::BristolFormat* circ, int num_clients, PartitionMode mode, double gamma = 0.2) {
     switch (mode) {
         case PART_TOPOLOGICAL_BALANCED: return computePartition(circ, num_clients, true);
         case PART_UNBALANCED:           return computePartition(circ, num_clients, false);
@@ -877,6 +850,9 @@ inline void sendClientMetrics(emp::NetIO* io, const ClientMetrics& cm) {
     io->send_data(times, sizeof(times));
     size_t bytes[3] = {cm.garbled_table_bytes, cm.ot_are_bytes, cm.boundary_are_bytes};
     io->send_data(bytes, sizeof(bytes));
+    size_t wire[4] = {cm.wire_garble_bytes, cm.wire_ot_are_bytes,
+                      cm.wire_boundary_bytes, cm.wire_total_bytes};
+    io->send_data(wire, sizeof(wire));
 }
 
 inline ClientMetrics recvClientMetrics(emp::NetIO* io) {
@@ -897,5 +873,11 @@ inline ClientMetrics recvClientMetrics(emp::NetIO* io) {
     cm.garbled_table_bytes = bytes[0];
     cm.ot_are_bytes = bytes[1];
     cm.boundary_are_bytes = bytes[2];
+    size_t wire[4];
+    io->recv_data(wire, sizeof(wire));
+    cm.wire_garble_bytes   = wire[0];
+    cm.wire_ot_are_bytes   = wire[1];
+    cm.wire_boundary_bytes = wire[2];
+    cm.wire_total_bytes    = wire[3];
     return cm;
 }

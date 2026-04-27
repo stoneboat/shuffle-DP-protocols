@@ -252,7 +252,7 @@ public:
     // The kernel keeps a single copy of the file's pages and serves them to
     // every process that mmaps with MAP_SHARED|PROT_READ — so adding more
     // clients no longer multiplies the lookup-table memory cost.
-    bool LoadLookupTableMmap(const std::string& path) {
+    bool LoadLookupTableMmap(const std::string& path, bool quiet = false) {
         int fd = ::open(path.c_str(), O_RDONLY);
         if (fd < 0) return false;
         struct stat st;
@@ -289,7 +289,7 @@ public:
         // pages should stay resident across processes.
         ::madvise(p, st.st_size, MADV_RANDOM);
 
-        std::cout << "[RabinOTARE] Lookup table mmap'd shared: " << mmap_n_
+        if (!quiet) std::cout << "[RabinOTARE] Lookup table mmap'd shared: " << mmap_n_
                   << " entries for ell_A=" << ell_A
                   << " from " << path
                   << " (" << (st.st_size / (1024*1024)) << " MiB shared via page cache)" << std::endl;

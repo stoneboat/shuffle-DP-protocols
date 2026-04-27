@@ -107,6 +107,12 @@ int main(int argc, char** argv) {
     metrics.num_boundary_in = (int)pi.boundary_in.size();
     metrics.num_boundary_out = (int)pi.boundary_out.size();
 
+    // Snapshot of the NetIO send counter at each phase boundary so we can
+    // measure the actual bytes pushed onto the socket per phase. emp::NetIO
+    // increments its `counter` field on every send_data; recv_data is not
+    // counted, so this measures sender-side bandwidth only.
+    uint64_t wire_snap_start = io->counter;
+
     // ── Phase 1: Boundary handling (as consumer) ────────────────────────────
     if (c > 0) {
         int n_boundary = recvInt(io);
@@ -136,7 +142,10 @@ int main(int argc, char** argv) {
             for (int t = 0; t < nthreads; t++) {
                 pxt_pool[t] = std::unique_ptr<PermXOTARE>(new PermXOTARE(8, 4));
                 pxt_pool[t]->Setup(/*build_table=*/false);
-                if (!pxt_pool[t]->LoadTableMmap("bin/lookup_20.mmap.bin"))
+                // quiet=true: the global pxt_boundary already announced this
+                // file at startup; the per-thread pool would otherwise emit
+                // O(nthreads x N) duplicate banners and drown the slurm log.
+                if (!pxt_pool[t]->LoadTableMmap("bin/lookup_20.mmap.bin", /*quiet=*/true))
                     pxt_pool[t]->LoadTable("bin/lookup_20.bin");
             }
 
@@ -200,6 +209,10 @@ int main(int argc, char** argv) {
         // Wait for DONE signal
         recvInt(io);
     }
+    // Bytes shipped during the consumer-side boundary phase (BoundaryResultMsg
+    // only — the PXT-ARE encodings themselves are decoded locally, never sent).
+    uint64_t wire_snap_after_boundary_consumer = io->counter;
+    metrics.wire_boundary_bytes = wire_snap_after_boundary_consumer - wire_snap_start;
 
     // ── Phase 1b: Garble gates ──────────────────────────────────────────────
     std::vector<emp::block> garbled_tables;
@@ -234,9 +247,11 @@ int main(int argc, char** argv) {
         std::cout << "[Client " << c << "] Garbled " << metrics.num_and_gates << " AND gates, " << metrics.garbled_table_bytes << " bytes." << std::endl;
 
     // ── Send garbled tables ─────────────────────────────────────────────────
+    uint64_t wire_snap_before_garble_send = io->counter;
     sendInt(io, (int)garbled_tables.size());
     if (!garbled_tables.empty())
         io->send_block(garbled_tables.data(), (int)garbled_tables.size());
+    metrics.wire_garble_bytes = io->counter - wire_snap_before_garble_send;
 
     // ── Send boundary producer data ─────────────────────────────────────────
     // For each wire this client produces that is needed by a later client
@@ -259,9 +274,13 @@ int main(int argc, char** argv) {
             prod_data.push_back(bh);
         }
     }
+    uint64_t wire_snap_before_producer = io->counter;
     sendInt(io, (int)prod_data.size());
     for (auto& bh : prod_data)
         sendBoundaryHashInfo(io, bh);
+    // Producer-side boundary bytes are still part of the boundary-handshake
+    // budget on the wire, so fold them into wire_boundary_bytes.
+    metrics.wire_boundary_bytes += io->counter - wire_snap_before_producer;
 
     // ── Send output W0 labels ───────────────────────────────────────────────
     sendInt(io, (int)pi.output_wires.size());
@@ -323,6 +342,7 @@ int main(int argc, char** argv) {
             }
         }
 
+        uint64_t wire_snap_before_ot_send = io->counter;
         sendInt(io, n_inputs);
         for (int i = 0; i < n_inputs; i++) {
             sendInt(io, inp_encs[i].w);
@@ -331,8 +351,14 @@ int main(int argc, char** argv) {
                 sendReceiverEncoding(io, inp_encs[i].re[j]);
             }
         }
-        metrics.ot_are_bytes += (size_t)n_inputs * 16 * (2 * 480 + 2 * 480);
+        metrics.ot_are_bytes      += (size_t)n_inputs * 16 * (2 * 480 + 2 * 480);
+        metrics.wire_ot_are_bytes  = io->counter - wire_snap_before_ot_send;
     }
+
+    // Total wire bytes captured *before* shipping the metrics struct. The
+    // sendClientMetrics call itself adds ~120 bytes of overhead that won't be
+    // reflected in the recorded value — negligible against MB-scale totals.
+    metrics.wire_total_bytes = io->counter - wire_snap_start;
 
     // ── Send metrics ────────────────────────────────────────────────────────
     sendClientMetrics(io, metrics);
@@ -343,8 +369,13 @@ int main(int argc, char** argv) {
                   << metrics.garble_time_us << "us  ot="
                   << metrics.ot_are_time_us << "us  boundary="
                   << metrics.boundary_time_us << "us  total="
-                  << metrics.total_time_us() << "us  bytes="
-                  << metrics.total_bytes() << std::endl;
+                  << metrics.total_time_us() << "us  are_bytes="
+                  << metrics.total_bytes() << "  wire_bytes="
+                  << metrics.wire_total_bytes
+                  << " (garble=" << metrics.wire_garble_bytes
+                  << " ot=" << metrics.wire_ot_are_bytes
+                  << " bnd=" << metrics.wire_boundary_bytes << ")"
+                  << std::endl;
     }
 
     delete io;

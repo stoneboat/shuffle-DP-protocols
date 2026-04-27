@@ -21,6 +21,15 @@ struct ClientMetrics {
     size_t garbled_table_bytes  = 0;
     size_t ot_are_bytes         = 0;
     size_t boundary_are_bytes   = 0;
+    // Actual bytes pushed over the socket (sender-side, from emp::NetIO::counter).
+    // The three fields above are the analytic ARE encoding sizes; these four are
+    // the real wire transfer (PXT-ARE diff is sent, but the encodings themselves
+    // are decoded locally and never travel, so wire_boundary_bytes is much
+    // smaller than boundary_are_bytes).
+    size_t wire_garble_bytes    = 0;  // garbled-table ciphertexts on the wire
+    size_t wire_ot_are_bytes    = 0;  // input OT-ARE encodings (these DO travel)
+    size_t wire_boundary_bytes  = 0;  // BoundaryResultMsg + BoundaryHashInfo
+    size_t wire_total_bytes     = 0;  // io->counter at end of session
 
     double total_time_us() const {
         return garble_time_us + ot_are_time_us + boundary_time_us;
@@ -78,7 +87,8 @@ static const char* CSV_HEADER =
     "experiment,n_clients,circuit,circuit_gates,bit_width,balanced,partition_mode,total_boundary_pins,client_id,"
     "num_gates,num_and,num_inputs,num_boundary_in,num_boundary_out,"
     "garble_time_us,ot_are_time_us,boundary_time_us,total_time_us,"
-    "garbled_table_bytes,ot_are_bytes,boundary_bytes,total_bytes";
+    "garbled_table_bytes,ot_are_bytes,boundary_bytes,total_bytes,"
+    "wire_garble_bytes,wire_ot_are_bytes,wire_boundary_bytes,wire_total_bytes";
 
 static void writeCSVRow(std::ostream& out, const RunResult& r, const ClientMetrics& c) {
     out << r.experiment << ","
@@ -102,7 +112,11 @@ static void writeCSVRow(std::ostream& out, const RunResult& r, const ClientMetri
         << c.garbled_table_bytes << ","
         << c.ot_are_bytes << ","
         << c.boundary_are_bytes << ","
-        << c.total_bytes()
+        << c.total_bytes() << ","
+        << c.wire_garble_bytes << ","
+        << c.wire_ot_are_bytes << ","
+        << c.wire_boundary_bytes << ","
+        << c.wire_total_bytes
         << "\n";
 }
 
@@ -138,7 +152,8 @@ static void printSummary(const RunResult& r) {
                   << " ot=" << c.ot_are_time_us << "us"
                   << " bnd=" << c.boundary_time_us << "us"
                   << " total=" << c.total_time_us() << "us"
-                  << " bytes=" << c.total_bytes() << "\n";
+                  << " bytes=" << c.total_bytes()
+                  << " wire=" << c.wire_total_bytes << "\n";
     }
 }
 
