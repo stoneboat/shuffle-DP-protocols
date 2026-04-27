@@ -8,7 +8,7 @@ BIN_DIR = bin
 CXX      = g++
 # CHANGED: -I$(EMP_DIR) instead of -I$(EMP_DIR)/include
 # REMOVED: SSL_DIR include (not needed on most Linux clusters)
-CXXFLAGS = -std=c++17 -O2 \
+CXXFLAGS = -std=c++17 -O2 -fopenmp \
            -I. -I$(ARE_DIR) -I$(ARE_DIR)/ot \
            -I$(MCL_DIR)/include \
            -I$(EMP_DIR)/include \

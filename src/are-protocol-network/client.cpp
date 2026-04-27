@@ -3,6 +3,9 @@
 #include <iostream>
 #include <cstring>
 #include <random>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 struct ClientArgs {
     std::string host = "127.0.0.1";
@@ -109,48 +112,69 @@ int main(int argc, char** argv) {
         if (n_boundary > 0) {
             ScopedTimer bt(metrics.boundary_time_us);
 
-            // Receive hash info for each boundary wire and compute PXT-ARE transfer
-            std::vector<BoundaryResultMsg> results;
-            for (int i = 0; i < n_boundary; i++) {
-                BoundaryHashInfo bh = recvBoundaryHashInfo(io);
+            // Receive all hash infos serially first, then parallelize the
+            // PXT-ARE encode/decode work across them.
+            std::vector<BoundaryHashInfo> bhs(n_boundary);
+            for (int i = 0; i < n_boundary; i++)
+                bhs[i] = recvBoundaryHashInfo(io);
 
-                emp::PRG prg_bnd;
-                emp::block W0_dst;
-                prg_bnd.random_block(&W0_dst, 1);
-                emp::block W1_dst = W0_dst ^ delta;
+            std::vector<BoundaryResultMsg> results(n_boundary);
+            std::vector<emp::block> W0_dsts(n_boundary);
 
-                uint8_t raw_dst0[16], raw_dst1[16], raw_HKp0[16], raw_HKp1[16];
-                uint8_t diff0[16], diff1[16];
-                memcpy(raw_dst0, &W0_dst, 16);
-                memcpy(raw_dst1, &W1_dst, 16);
-                memcpy(raw_HKp0, &bh.H_Kp0, 16);
-                memcpy(raw_HKp1, &bh.H_Kp1, 16);
-
-                size_t enc_bytes = 0;
-                for (int j = 0; j < 16; j++) {
-                    auto s0 = byteToBits(raw_dst0[j]);
-                    auto s1 = byteToBits(raw_dst1[j]);
-                    auto s0p = byteToBits(raw_HKp0[j]);
-                    auto s1p = byteToBits(raw_HKp1[j]);
-
-                    auto se = pxt_boundary.EncodeSender(s0, s1);
-                    auto re = pxt_boundary.EncodeReceiver(bh.perm_bit ? 1 : 0, s0p, s1p);
-                    auto [first, second] = pxt_boundary.Decode(se, re);
-                    assert(!first.empty() && !second.empty());
-                    diff0[j] = bitsToUint8(first);
-                    diff1[j] = bitsToUint8(second);
-                    enc_bytes += 2 * 480 + 2 * 480;
+            #pragma omp parallel
+            {
+                // Per-thread encoder: shares the mmap'd lookup table with the
+                // outer pxt_boundary via the kernel page cache, but has its own
+                // mt19937 rng so concurrent EncodeSender calls are safe.
+                PermXOTARE local_pxt(8, 4);
+                #pragma omp critical(pxt_setup)
+                {
+                    local_pxt.Setup(/*build_table=*/false);
+                    if (!local_pxt.LoadTableMmap("bin/lookup_20.mmap.bin"))
+                        local_pxt.LoadTable("bin/lookup_20.bin");
                 }
-                metrics.boundary_are_bytes += enc_bytes;
-                W0_wire[bh.wire_id] = W0_dst;
 
-                BoundaryResultMsg br;
-                br.wire_id = bh.wire_id;
-                memcpy(&br.xor_diff_0, diff0, 16);
-                memcpy(&br.xor_diff_1, diff1, 16);
-                br.perm_bit = bh.perm_bit;
-                results.push_back(br);
+                #pragma omp for schedule(dynamic, 4)
+                for (int i = 0; i < n_boundary; i++) {
+                    const BoundaryHashInfo& bh = bhs[i];
+                    emp::PRG prg_bnd;
+                    emp::block W0_dst;
+                    prg_bnd.random_block(&W0_dst, 1);
+                    emp::block W1_dst = W0_dst ^ delta;
+
+                    uint8_t raw_dst0[16], raw_dst1[16], raw_HKp0[16], raw_HKp1[16];
+                    uint8_t diff0[16], diff1[16];
+                    memcpy(raw_dst0, &W0_dst, 16);
+                    memcpy(raw_dst1, &W1_dst, 16);
+                    memcpy(raw_HKp0, &bh.H_Kp0, 16);
+                    memcpy(raw_HKp1, &bh.H_Kp1, 16);
+
+                    for (int j = 0; j < 16; j++) {
+                        auto s0  = byteToBits(raw_dst0[j]);
+                        auto s1  = byteToBits(raw_dst1[j]);
+                        auto s0p = byteToBits(raw_HKp0[j]);
+                        auto s1p = byteToBits(raw_HKp1[j]);
+
+                        auto se = local_pxt.EncodeSender(s0, s1);
+                        auto re = local_pxt.EncodeReceiver(bh.perm_bit ? 1 : 0, s0p, s1p);
+                        auto [first, second] = local_pxt.Decode(se, re);
+                        assert(!first.empty() && !second.empty());
+                        diff0[j] = bitsToUint8(first);
+                        diff1[j] = bitsToUint8(second);
+                    }
+                    W0_dsts[i] = W0_dst;
+                    BoundaryResultMsg br;
+                    br.wire_id = bh.wire_id;
+                    memcpy(&br.xor_diff_0, diff0, 16);
+                    memcpy(&br.xor_diff_1, diff1, 16);
+                    br.perm_bit = bh.perm_bit;
+                    results[i] = br;
+                }
             }
+
+            metrics.boundary_are_bytes += (size_t)n_boundary * 16 * (2 * 480 + 2 * 480);
+            for (int i = 0; i < n_boundary; i++)
+                W0_wire[bhs[i].wire_id] = W0_dsts[i];
 
             // Send all boundary results back to evaluator
             sendInt(io, (int)results.size());
@@ -235,29 +259,53 @@ int main(int argc, char** argv) {
     // ── Compute and send OT-ARE encodings for input wires ───────────────────
     {
         ScopedTimer ot_t(metrics.ot_are_time_us);
+
+        // Compute all encodings in parallel into a buffer, then send sequentially.
+        struct InputWireEnc {
+            int w;
+            SenderEncoding se[16];
+            ReceiverEncoding re[16];
+        };
+        std::vector<InputWireEnc> inp_encs(n_inputs);
+
+        #pragma omp parallel
+        {
+            StringOTARE local_ot(8, 4);
+            #pragma omp critical(ot_input_setup)
+            {
+                local_ot.Setup(/*build_table=*/false);
+                if (!local_ot.LoadTableMmap("bin/lookup_12.mmap.bin"))
+                    local_ot.LoadTable("bin/lookup_12.bin");
+            }
+
+            #pragma omp for schedule(dynamic, 4)
+            for (int i = 0; i < n_inputs; i++) {
+                int w = pi.inp_start + i;
+                int bit = my_input_bits[i];
+                emp::block W0 = W0_inputs[i];
+                emp::block W1 = W0 ^ delta;
+
+                uint8_t raw0[16], raw1[16];
+                memcpy(raw0, &W0, 16);
+                memcpy(raw1, &W1, 16);
+
+                inp_encs[i].w = w;
+                for (int j = 0; j < 16; j++) {
+                    inp_encs[i].se[j] = local_ot.EncodeSender(byteToBits(raw0[j]), byteToBits(raw1[j]));
+                    inp_encs[i].re[j] = local_ot.EncodeReceiver(bit);
+                }
+            }
+        }
+
         sendInt(io, n_inputs);
         for (int i = 0; i < n_inputs; i++) {
-            int w = pi.inp_start + i;
-            int bit = my_input_bits[i];
-            emp::block W0 = W0_inputs[i];
-            emp::block W1 = W0 ^ delta;
-
-            sendInt(io, w);
-
-            uint8_t raw0[16], raw1[16];
-            memcpy(raw0, &W0, 16);
-            memcpy(raw1, &W1, 16);
-            size_t enc_bytes = 0;
-
+            sendInt(io, inp_encs[i].w);
             for (int j = 0; j < 16; j++) {
-                auto se = ot_input.EncodeSender(byteToBits(raw0[j]), byteToBits(raw1[j]));
-                sendSenderEncoding(io, se);
-                auto re = ot_input.EncodeReceiver(bit);
-                sendReceiverEncoding(io, re);
-                enc_bytes += 2 * 480 + 2 * 480;
+                sendSenderEncoding(io, inp_encs[i].se[j]);
+                sendReceiverEncoding(io, inp_encs[i].re[j]);
             }
-            metrics.ot_are_bytes += enc_bytes;
         }
+        metrics.ot_are_bytes += (size_t)n_inputs * 16 * (2 * 480 + 2 * 480);
     }
 
     // ── Send metrics ────────────────────────────────────────────────────────

@@ -28,6 +28,8 @@ struct Args {
     bool benchmark = false;   // run all circuit/N/partition combos
     bool spawn_clients = false; // fork+exec client processes
     bool circuit_explicit = false; // true if --circuit was passed
+    int n_min = 2;            // benchmark sweep: smallest N (default 2)
+    int n_max = 64;           // benchmark sweep: largest N  (default 64)
     std::string self_path;    // argv[0] for finding client binary
 };
 
@@ -58,6 +60,8 @@ static Args parseArgs(int argc, char** argv) {
         else if (arg == "-q") a.verbose = false;
         else if (arg == "--benchmark") a.benchmark = true;
         else if (arg == "--spawn-clients") a.spawn_clients = true;
+        else if (arg == "--n-min" && i+1 < argc) a.n_min = atoi(argv[++i]);
+        else if (arg == "--n-max" && i+1 < argc) a.n_max = atoi(argv[++i]);
     }
     return a;
 }
@@ -487,7 +491,14 @@ int main(int argc, char** argv) {
         const std::vector<std::string> circuits = args.circuit_explicit
             ? std::vector<std::string>{args.circuit}
             : std::vector<std::string>{"gausssum", "select", "lcb", "bitonic"};
-        const std::vector<int> n_values = {2, 4, 8, 16, 32, 64};
+        std::vector<int> n_values;
+        for (int n = 2; n <= 1 << 20; n <<= 1) {
+            if (n >= args.n_min && n <= args.n_max) n_values.push_back(n);
+        }
+        if (n_values.empty()) {
+            std::cerr << "[Evaluator] No N values in range [" << args.n_min<< ", " << args.n_max << "]" << std::endl;
+            return 1;
+        }
         // If --partition was explicit, only run that mode; otherwise sweep all.
         const std::vector<PartitionMode> modes = args.partition_explicit
             ? std::vector<PartitionMode>{args.partition_mode}
