@@ -178,6 +178,51 @@ static std::vector<int> sampleInputBits(const Args& a, emp::BristolFormat* circ,
         return bits;
     }
 
+    if (a.circuit == "lcb") {
+        // Tree (Fenwick) mechanism with Laplace noise.
+        // Layout: [0, T*D*K) data || [T*D*K, 2*T*D*K) noise.
+        //   T = num rounds (defaults to N), d = feat_dim, D = d + d*d.
+        // One Lap(0, log(T)/eps) sample per (Fenwick node i in [1,T], dimension
+        // dim in [0,D)), bit-decomposed as K-bit two's complement. Sampled as
+        // sign * Exp(eps/log T) — same trick as the distinct branch.
+        const double epsilon = 1.0;
+        const int T = (a.T > 0) ? a.T : N;
+        const int d = a.D;
+        const int D = d + d * d;
+        const int max_val = (1 << K) - 1;
+        const int noise_max = (1 << (K - 1)) - 1;
+        const int noise_min = -(1 << (K - 1));
+        const double log_T = std::log((double)std::max(T, 2));
+        const double lap_rate = epsilon / log_T;  // E[|z|] = log T / eps
+        std::uniform_int_distribution<int> val_dist(0, max_val);
+        std::exponential_distribution<double> exp_dist(lap_rate);
+        std::uniform_int_distribution<int> sign_dist(0, 1);
+
+        const int total_data_bits = T * D * K;
+        // Data: per-round contributions (uniform values; the protocol cost is
+        // data-independent so any reasonable values benchmark identically).
+        for (int t = 0; t < T; t++) {
+            for (int dim = 0; dim < D; dim++) {
+                int v = val_dist(rng);
+                int base = (t * D + dim) * K;
+                for (int b = 0; b < K; b++)
+                    bits[base + b] = (v >> b) & 1;
+            }
+        }
+        // Noise: one Lap(0, log T / eps) per (Fenwick node, dimension).
+        for (int i = 1; i <= T; i++) {
+            for (int dim = 0; dim < D; dim++) {
+                double z_d = (sign_dist(rng) ? 1.0 : -1.0) * exp_dist(rng);
+                int z = std::clamp((int)std::round(z_d), noise_min, noise_max);
+                uint32_t z_u = (uint32_t)(z & ((1u << K) - 1));
+                int base = total_data_bits + ((i - 1) * D + dim) * K;
+                for (int b = 0; b < K; b++)
+                    bits[base + b] = (z_u >> b) & 1;
+            }
+        }
+        return bits;
+    }
+
     std::uniform_int_distribution<int> bit_dist(0, 1);
     for (auto& b : bits) b = bit_dist(rng);
     return bits;
