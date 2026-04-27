@@ -2,6 +2,7 @@
 #include "gc_protocol.h"
 #include <iostream>
 #include <cstring>
+#include <memory>
 #include <random>
 #ifdef _OPENMP
 #include <omp.h>
@@ -121,18 +122,31 @@ int main(int argc, char** argv) {
             std::vector<BoundaryResultMsg> results(n_boundary);
             std::vector<emp::block> W0_dsts(n_boundary);
 
-            #pragma omp parallel
+            // Pre-allocate one PermXOTARE per OpenMP thread, serially in the
+            // main thread. Setup() calls initPairing(BN254) which mutates mcl
+            // global state — concurrent calls (or calls concurrent with mcl
+            // ops on other threads) corrupt pairing parameters and produce
+            // garbage encodings. Doing every Setup before entering the
+            // parallel region is the only safe arrangement.
+            int nthreads = 1;
+        #ifdef _OPENMP
+            nthreads = omp_get_max_threads();
+        #endif
+            std::vector<std::unique_ptr<PermXOTARE>> pxt_pool(nthreads);
+            for (int t = 0; t < nthreads; t++) {
+                pxt_pool[t] = std::unique_ptr<PermXOTARE>(new PermXOTARE(8, 4));
+                pxt_pool[t]->Setup(/*build_table=*/false);
+                if (!pxt_pool[t]->LoadTableMmap("bin/lookup_20.mmap.bin"))
+                    pxt_pool[t]->LoadTable("bin/lookup_20.bin");
+            }
+
+            #pragma omp parallel num_threads(nthreads)
             {
-                // Per-thread encoder: shares the mmap'd lookup table with the
-                // outer pxt_boundary via the kernel page cache, but has its own
-                // mt19937 rng so concurrent EncodeSender calls are safe.
-                PermXOTARE local_pxt(8, 4);
-                #pragma omp critical(pxt_setup)
-                {
-                    local_pxt.Setup(/*build_table=*/false);
-                    if (!local_pxt.LoadTableMmap("bin/lookup_20.mmap.bin"))
-                        local_pxt.LoadTable("bin/lookup_20.bin");
-                }
+                int tid = 0;
+            #ifdef _OPENMP
+                tid = omp_get_thread_num();
+            #endif
+                PermXOTARE& local_pxt = *pxt_pool[tid];
 
                 #pragma omp for schedule(dynamic, 4)
                 for (int i = 0; i < n_boundary; i++) {
@@ -268,15 +282,27 @@ int main(int argc, char** argv) {
         };
         std::vector<InputWireEnc> inp_encs(n_inputs);
 
-        #pragma omp parallel
+        // Pre-allocate one StringOTARE per OpenMP thread serially. See note
+        // in the boundary loop above: Setup() calls initPairing(BN254) which
+        // mutates mcl globals and is unsafe to overlap with mcl ops on other
+        // threads. Encoding doesn't need a decode lookup table, so we skip it.
+        int nthreads = 1;
+    #ifdef _OPENMP
+        nthreads = omp_get_max_threads();
+    #endif
+        std::vector<std::unique_ptr<StringOTARE>> ot_pool(nthreads);
+        for (int t = 0; t < nthreads; t++) {
+            ot_pool[t] = std::unique_ptr<StringOTARE>(new StringOTARE(8, 4));
+            ot_pool[t]->Setup(/*build_table=*/false);
+        }
+
+        #pragma omp parallel num_threads(nthreads)
         {
-            StringOTARE local_ot(8, 4);
-            #pragma omp critical(ot_input_setup)
-            {
-                local_ot.Setup(/*build_table=*/false);
-                if (!local_ot.LoadTableMmap("bin/lookup_12.mmap.bin"))
-                    local_ot.LoadTable("bin/lookup_12.bin");
-            }
+            int tid = 0;
+        #ifdef _OPENMP
+            tid = omp_get_thread_num();
+        #endif
+            StringOTARE& local_ot = *ot_pool[tid];
 
             #pragma omp for schedule(dynamic, 4)
             for (int i = 0; i < n_inputs; i++) {
