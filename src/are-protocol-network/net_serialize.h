@@ -534,6 +534,9 @@ inline GlobalPartition computePartitionMinMaxBoundary(emp::BristolFormat* circ, 
         int m = 0; for (int x : v) if (x > m) m = x; return m;
     };
 
+    // --- ADAPTIVE WARM START (1-LINE) ---
+    if (auto topo = computePartition(circ, num_clients, true); vecMax(recomputeBoundaryIn(topo.gate_start, topo.gate_end)) < vecMax(recomputeBoundaryIn(gate_start, gate_end))) { gate_start = topo.gate_start; gate_end = topo.gate_end; }
+
     std::vector<int> cur_counts = recomputeBoundaryIn(gate_start, gate_end);
     int cur_max = vecMax(cur_counts);
 
