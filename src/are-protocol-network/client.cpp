@@ -44,12 +44,7 @@ int main(int argc, char** argv) {
     PartitionInfo pi = recvPartitionInfo(io);
     assert(pi.client_id == c);
     if (args.verbose) {
-        std::cout << "[Client " << c << "] Partition: inputs ["
-                  << pi.inp_start << "," << pi.inp_end << ")  gates ["
-                  << pi.gate_start << "," << pi.gate_end << ")"
-                  << "  boundary_in=" << pi.boundary_in.size()
-                  << "  boundary_out=" << pi.boundary_out.size()
-                  << "  output_wires=" << pi.output_wires.size() << std::endl;
+        std::cout << "[Client " << c << "] Partition: inputs [" << pi.inp_start << "," << pi.inp_end << ")  gates [" << pi.gate_start << "," << pi.gate_end << ")" << "  boundary_in=" << pi.boundary_in.size() << "  boundary_out=" << pi.boundary_out.size() << "  output_wires=" << pi.output_wires.size() << std::endl;
     }
 
     emp::block delta, mitccrh_seed;
@@ -66,9 +61,6 @@ int main(int argc, char** argv) {
     PermXOTARE pxt_boundary(8, 4);
     pxt_boundary.Setup(/*build_table=*/false);
     if (c > 0 && !pi.boundary_in.empty()) {
-        // Prefer mmap-shared file: at large N, every client process duplicating
-        // the ell_A=20 table (~420 MB heap) is what OOMs the node. With the
-        // .mmap.bin file, the kernel page cache keeps one copy host-wide.
         if (!pxt_boundary.LoadTableMmap("bin/lookup_20.mmap.bin")) {
             if (!pxt_boundary.LoadTable("bin/lookup_20.bin")) {
                 std::cerr << "[Client " << c << "] bin/lookup_20 table not found, building..." << std::endl;
@@ -106,11 +98,6 @@ int main(int argc, char** argv) {
     metrics.num_input_wires = n_inputs;
     metrics.num_boundary_in = (int)pi.boundary_in.size();
     metrics.num_boundary_out = (int)pi.boundary_out.size();
-
-    // Snapshot of the NetIO send counter at each phase boundary so we can
-    // measure the actual bytes pushed onto the socket per phase. emp::NetIO
-    // increments its `counter` field on every send_data; recv_data is not
-    // counted, so this measures sender-side bandwidth only.
     uint64_t wire_snap_start = io->counter;
 
     // ── Phase 1: Boundary handling (as consumer) ────────────────────────────
@@ -127,13 +114,6 @@ int main(int argc, char** argv) {
 
             std::vector<BoundaryResultMsg> results(n_boundary);
             std::vector<emp::block> W0_dsts(n_boundary);
-
-            // Pre-allocate one PermXOTARE per OpenMP thread, serially in the
-            // main thread. Setup() calls initPairing(BN254) which mutates mcl
-            // global state — concurrent calls (or calls concurrent with mcl
-            // ops on other threads) corrupt pairing parameters and produce
-            // garbage encodings. Doing every Setup before entering the
-            // parallel region is the only safe arrangement.
             int nthreads = 1;
         #ifdef _OPENMP
             nthreads = omp_get_max_threads();
@@ -142,9 +122,6 @@ int main(int argc, char** argv) {
             for (int t = 0; t < nthreads; t++) {
                 pxt_pool[t] = std::unique_ptr<PermXOTARE>(new PermXOTARE(8, 4));
                 pxt_pool[t]->Setup(/*build_table=*/false);
-                // quiet=true: the global pxt_boundary already announced this
-                // file at startup; the per-thread pool would otherwise emit
-                // O(nthreads x N) duplicate banners and drown the slurm log.
                 if (!pxt_pool[t]->LoadTableMmap("bin/lookup_20.mmap.bin", /*quiet=*/true))
                     pxt_pool[t]->LoadTable("bin/lookup_20.bin");
             }
@@ -205,12 +182,8 @@ int main(int argc, char** argv) {
                 sendBoundaryResult(io, br);
             io->flush();
         }
-
-        // Wait for DONE signal
         recvInt(io);
     }
-    // Bytes shipped during the consumer-side boundary phase (BoundaryResultMsg
-    // only — the PXT-ARE encodings themselves are decoded locally, never sent).
     uint64_t wire_snap_after_boundary_consumer = io->counter;
     metrics.wire_boundary_bytes = wire_snap_after_boundary_consumer - wire_snap_start;
 
@@ -279,7 +252,6 @@ int main(int argc, char** argv) {
     for (auto& bh : prod_data)
         sendBoundaryHashInfo(io, bh);
     // Producer-side boundary bytes are still part of the boundary-handshake
-    // budget on the wire, so fold them into wire_boundary_bytes.
     metrics.wire_boundary_bytes += io->counter - wire_snap_before_producer;
 
     // ── Send output W0 labels ───────────────────────────────────────────────
@@ -300,11 +272,6 @@ int main(int argc, char** argv) {
             ReceiverEncoding re[16];
         };
         std::vector<InputWireEnc> inp_encs(n_inputs);
-
-        // Pre-allocate one StringOTARE per OpenMP thread serially. See note
-        // in the boundary loop above: Setup() calls initPairing(BN254) which
-        // mutates mcl globals and is unsafe to overlap with mcl ops on other
-        // threads. Encoding doesn't need a decode lookup table, so we skip it.
         int nthreads = 1;
     #ifdef _OPENMP
         nthreads = omp_get_max_threads();
@@ -354,10 +321,6 @@ int main(int argc, char** argv) {
         metrics.ot_are_bytes      += (size_t)n_inputs * 16 * (2 * 480 + 2 * 480);
         metrics.wire_ot_are_bytes  = io->counter - wire_snap_before_ot_send;
     }
-
-    // Total wire bytes captured *before* shipping the metrics struct. The
-    // sendClientMetrics call itself adds ~120 bytes of overhead that won't be
-    // reflected in the recorded value — negligible against MB-scale totals.
     metrics.wire_total_bytes = io->counter - wire_snap_start;
 
     // ── Send metrics ────────────────────────────────────────────────────────

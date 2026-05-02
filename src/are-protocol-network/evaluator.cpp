@@ -23,7 +23,7 @@ struct Args {
     bool partition_explicit = false; // true if --partition was passed
     double gamma = 0.2;          // slack for non-XOR balance constraint (paper §7)
     std::string csv_file;
-    std::string experiment; // custom experiment name for CSV
+    std::string experiment;
     bool verbose = true;
     bool benchmark = false;   // run all circuit/N/partition combos
     bool spawn_clients = false; // fork+exec client processes
@@ -103,11 +103,6 @@ static std::string getClientPath(const std::string& evaluator_path) {
 }
 
 // ── Input sampling for DP circuits ──────────────────────────────────────────
-// Produces the full plaintext bit-vector (size == total_inputs) that matches
-// the circuit's input layout. Noise distributions chosen per circuit:
-//   - gausssum: each client's value = clamp(x_i + z_i) with z_i ~ N(0, σ_local)
-//   - distinct: user values uniform over [0, 2^K); noise ~ Lap(1/ε) appended as NB-bit two's complement
-// For other circuits, falls back to uniform random bits (benchmark-only).
 static std::vector<int> sampleInputBits(const Args& a, emp::BristolFormat* circ, std::mt19937& rng) {
     int total_inputs = circ->n1 + circ->n2;
     std::vector<int> bits(total_inputs);
@@ -157,7 +152,6 @@ static std::vector<int> sampleInputBits(const Args& a, emp::BristolFormat* circ,
 
     if (a.circuit == "select") {
         // One-hot votes + Gumbel-per-choice sampled in plaintext, biased into
-        // unsigned NB bits, plus trailing constant-1 wire (required by circuit).
         const double epsilon = 1.0;
         const int D = a.D;
         const int noise_mid = 1 << (NB - 1);
@@ -179,12 +173,7 @@ static std::vector<int> sampleInputBits(const Args& a, emp::BristolFormat* circ,
     }
 
     if (a.circuit == "lcb") {
-        // Tree (Fenwick) mechanism with Laplace noise.
-        // Layout: [0, T*D*K) data || [T*D*K, 2*T*D*K) noise.
-        //   T = num rounds (defaults to N), d = feat_dim, D = d + d*d.
-        // One Lap(0, log(T)/eps) sample per (Fenwick node i in [1,T], dimension
-        // dim in [0,D)), bit-decomposed as K-bit two's complement. Sampled as
-        // sign * Exp(eps/log T) — same trick as the distinct branch.
+        // One Lap(0, log(T)/eps) sample per (Fenwick node i in [1,T], dimension dim in [0,D)), bit-decomposed as K-bit two's complement. Sampled as sign * Exp(eps/log T)
         const double epsilon = 1.0;
         const int T = (a.T > 0) ? a.T : N;
         const int d = a.D;
@@ -199,8 +188,6 @@ static std::vector<int> sampleInputBits(const Args& a, emp::BristolFormat* circ,
         std::uniform_int_distribution<int> sign_dist(0, 1);
 
         const int total_data_bits = T * D * K;
-        // Data: per-round contributions (uniform values; the protocol cost is
-        // data-independent so any reasonable values benchmark identically).
         for (int t = 0; t < T; t++) {
             for (int dim = 0; dim < D; dim++) {
                 int v = val_dist(rng);
@@ -209,7 +196,6 @@ static std::vector<int> sampleInputBits(const Args& a, emp::BristolFormat* circ,
                     bits[base + b] = (v >> b) & 1;
             }
         }
-        // Noise: one Lap(0, log T / eps) per (Fenwick node, dimension).
         for (int i = 1; i <= T; i++) {
             for (int dim = 0; dim < D; dim++) {
                 double z_d = (sign_dist(rng) ? 1.0 : -1.0) * exp_dist(rng);
@@ -228,8 +214,6 @@ static std::vector<int> sampleInputBits(const Args& a, emp::BristolFormat* circ,
     return bits;
 }
 
-// Slice full plaintext bit-vector into per-client "0"/"1" strings matching the
-// evaluator's input partition. Each client only sees bits for its wire range.
 static std::vector<std::string> sliceInputsPerClient(const std::vector<int>& bits, const GlobalPartition& gp) {
     int N = (int)gp.inp_start.size();
     std::vector<std::string> per_client(N);
@@ -279,8 +263,7 @@ static RunResult runProtocol(const Args& args) {
         std::cout << "[Evaluator] Circuit: " << args.circuit<< "  gates=" << circ->num_gate<< "  inputs=" << (circ->n1 + circ->n2)<< "  outputs=" << circ->n3 << std::endl;
     }
 
-    // Compute partition (dispatched by --partition; legacy --unbalanced still
-    // works because parseArgs maps it to PART_UNBALANCED).
+    // Compute partition (dispatched by --partition)
     GlobalPartition gp = computePartitionByMode(circ, N, args.partition_mode, args.gamma);
 
     // Open N server connections
@@ -302,7 +285,7 @@ static RunResult runProtocol(const Args& args) {
     }
     if (args.verbose) std::cout << "[Evaluator] Partition info sent." << std::endl;
 
-    // ── Phase 0b: Derive delta+seed deterministically (no network) ──────────
+    // ── Phase 0b: Derive delta+seed deterministically ──────────
     emp::block delta, mitccrh_seed;
     deriveDeltaAndSeed(delta, mitccrh_seed);
     if (args.verbose) std::cout << "[Evaluator] Delta+seed derived locally." << std::endl;
@@ -320,9 +303,6 @@ static RunResult runProtocol(const Args& args) {
     std::map<int, OTWireEncs> ot_encs;
     std::vector<ClientMetrics> all_metrics(N);
 
-    // Initialize ARE for decoding — prefer mmap-shared file (one copy across
-    // all client processes via the kernel page cache), fall back to legacy
-    // heap-loaded file, then to building from scratch.
     StringOTARE ot_decode(8, 4);
     ot_decode.Setup(/*build_table=*/false);
     if (!ot_decode.LoadTableMmap("bin/lookup_12.mmap.bin")) {
@@ -571,8 +551,6 @@ int main(int argc, char** argv) {
                     ea.experiment = "net_" + circ + "_N" + std::to_string(n) + "_" + mode_str;
                     std::cout << "=== Running: " << ea.experiment<< " port=" << port << " ===" << std::endl;
 
-                    // Sample plaintext inputs (Gaussian for gausssum, Laplace
-                    // for distinct, uniform for others) and slice per client.
                     emp::BristolFormat* preview_circ = buildCircuit(ea);
                     GlobalPartition preview_gp = computePartitionByMode(preview_circ, n, mode, ea.gamma);
                     std::mt19937 sample_rng(2026 + 17 * n + (int)mode);

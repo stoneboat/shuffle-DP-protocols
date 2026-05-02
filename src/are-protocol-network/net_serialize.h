@@ -168,29 +168,6 @@ inline GlobalPartition computePartition(emp::BristolFormat* circ, int num_client
     return gp;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Extended partition modes (paper §7: Definitions 7.1, 7.2, Problem 1)
-//
-// The original computePartition(circ, N, balanced) above is preserved and
-// remains the canonical "topologically balanced" / "all to client 0" splitter.
-// The functions below add three additional partition strategies that all keep
-// the contiguous gate-range structure (so the existing protocol still works):
-//
-//   PART_TOPOLOGICAL_BALANCED  — same as computePartition(circ, N, true)
-//   PART_UNBALANCED            — same as computePartition(circ, N, false)
-//   PART_NONXOR_BALANCED       — paper Def 7.2: equal Σ w(v) per client where
-//                                w(v) = 1[v is non-XOR/non-NOT gate] (i.e.,
-//                                AND-gate count balanced — the only gates
-//                                that produce garbled tables / dominate cost).
-//   PART_MIN_CUT               — paper Problem 1: among contiguous splits that
-//                                satisfy the (1+γ) non-XOR balance constraint,
-//                                pick cut points that minimize the pin-level
-//                                cut count (gate→gate edges crossing the cut).
-//
-// All modes use the same balanced (equal-size) input partitioning as the
-// original code so they inherit the same correctness profile.
-// ─────────────────────────────────────────────────────────────────────────────
-
 enum PartitionMode {
     PART_TOPOLOGICAL_BALANCED = 0,
     PART_UNBALANCED           = 1,
@@ -224,12 +201,7 @@ inline PartitionMode parsePartitionMode(const std::string& s) {
     return PART_TOPOLOGICAL_BALANCED;
 }
 
-inline void fillGlobalPartitionFromCuts(GlobalPartition& gp,
-                                        emp::BristolFormat* circ,
-                                        const std::vector<int>& inp_start,
-                                        const std::vector<int>& inp_end,
-                                        const std::vector<int>& gate_start,
-                                        const std::vector<int>& gate_end) {
+inline void fillGlobalPartitionFromCuts(GlobalPartition& gp, emp::BristolFormat* circ, const std::vector<int>& inp_start, const std::vector<int>& inp_end, const std::vector<int>& gate_start, const std::vector<int>& gate_end) {
     int num_clients = (int)inp_start.size();
     gp.num_clients  = num_clients;
     gp.total_inputs = circ->n1 + circ->n2;
@@ -273,9 +245,7 @@ inline void fillGlobalPartitionFromCuts(GlobalPartition& gp,
 }
 
 // Equal-size input partition shared by all extended modes.
-inline void balancedInputCuts(int total_inputs, int num_clients,
-                              std::vector<int>& inp_start,
-                              std::vector<int>& inp_end) {
+inline void balancedInputCuts(int total_inputs, int num_clients, std::vector<int>& inp_start, std::vector<int>& inp_end) {
     inp_start.assign(num_clients, 0);
     inp_end.assign(num_clients, 0);
     int base = total_inputs / num_clients, rem = total_inputs % num_clients;
@@ -330,11 +300,9 @@ inline GlobalPartition computePartitionNonXOR(emp::BristolFormat* circ, int num_
             gate_end[c] = num_gate;
         } else {
             int target = (int)std::round((double)(c+1) * total_nonxor / num_clients);
-            // smallest p with prefix_nonxor[p] >= target
             auto it = std::lower_bound(prefix_nonxor.begin() + gate_start[c],
                                        prefix_nonxor.end(), target);
             int p = (int)(it - prefix_nonxor.begin());
-            // Ensure each remaining client gets at least one gate.
             int min_p = gate_start[c] + 1;
             int max_p = num_gate - (num_clients - 1 - c);
             if (p < min_p) p = min_p;
@@ -349,8 +317,6 @@ inline GlobalPartition computePartitionNonXOR(emp::BristolFormat* circ, int num_
 }
 
 // Paper Problem 1: Balanced non-XOR min-cut partitioning.
-// Among contiguous gate splits that satisfy non-XOR (1+γ)/n balance, pick the
-// cut points that minimize cut_pin = #{gate→gate edges crossing a cut}.
 inline GlobalPartition computePartitionMinCut(emp::BristolFormat* circ, int num_clients,
                                               double gamma = 0.2) {
     GlobalPartition gp;
@@ -368,14 +334,10 @@ inline GlobalPartition computePartitionMinCut(emp::BristolFormat* circ, int num_
         return gp;
     }
 
-    // wire_producer[w] = gate index that outputs w (or -1 for input wires).
     std::vector<int> wire_producer(circ->num_wire, -1);
     for (int g = 0; g < num_gate; g++)
         wire_producer[circ->gates[4*g+2]] = g;
 
-    // crossings[p] = # of gate→gate edges (u → v) with u < p ≤ v.
-    // Each such edge contributes +1 to crossings[p] for p ∈ {u+1, ..., v}.
-    // Use a difference array, then prefix sum.
     std::vector<int> diff(num_gate + 2, 0);
     for (int v = 0; v < num_gate; v++) {
         int in0 = circ->gates[4*v+0], in1 = circ->gates[4*v+1];
@@ -448,8 +410,7 @@ inline GlobalPartition computePartitionMinCut(emp::BristolFormat* circ, int num_
     return gp;
 }
 
-// Paper Problem 2 (with μ_in instead of μ_out): Balanced non-XOR min-max boundary partitioning.
-// Among contiguous gate splits satisfying (1+γ)/n= non-XOR balance, pick cut points that minimise max_c |boundary_in[c]| — the worst-client incoming pin count
+// Paper Problem 2 (with μ_in): Balanced non-XOR min-max boundary partitioning.
 inline GlobalPartition computePartitionMinMaxBoundary(emp::BristolFormat* circ, int num_clients, double gamma = 0.2) {
     GlobalPartition gp = computePartitionMinCut(circ, num_clients, gamma);
     if (num_clients <= 1 || circ->num_gate == 0) return gp;
@@ -514,8 +475,8 @@ inline GlobalPartition computePartitionMinMaxBoundary(emp::BristolFormat* circ, 
         int hi_target = (int)std::floor(target + tol);
         if (hi_target < lo_target) hi_target = lo_target;
 
-        int seg_lo = gs[c-1] + 1;                   // ≥1 gate for client c-1
-        int seg_hi = num_gate - (num_clients - c);  // ≥1 gate per remaining client
+        int seg_lo = gs[c-1] + 1;
+        int seg_hi = num_gate - (num_clients - c);
         if (seg_hi < seg_lo) seg_hi = seg_lo;
 
         auto it_lo = std::lower_bound(prefix_w.begin() + seg_lo,
@@ -534,7 +495,6 @@ inline GlobalPartition computePartitionMinMaxBoundary(emp::BristolFormat* circ, 
         int m = 0; for (int x : v) if (x > m) m = x; return m;
     };
 
-    // --- ADAPTIVE WARM START (1-LINE) ---
     if (auto topo = computePartition(circ, num_clients, true); vecMax(recomputeBoundaryIn(topo.gate_start, topo.gate_end)) < vecMax(recomputeBoundaryIn(gate_start, gate_end))) { gate_start = topo.gate_start; gate_end = topo.gate_end; }
 
     std::vector<int> cur_counts = recomputeBoundaryIn(gate_start, gate_end);
@@ -602,8 +562,7 @@ inline GlobalPartition computePartitionByMode(emp::BristolFormat* circ, int num_
     return computePartition(circ, num_clients, true);
 }
 
-// Sum of |boundary_in[c]| across clients — pin-level cut count (paper notation
-// cut_pin(π)). Useful as a partition-quality metric to record in CSV.
+// Sum of |boundary_in[c]| across clients
 inline int totalBoundaryPins(const GlobalPartition& gp) {
     int s = 0;
     for (auto& v : gp.boundary_in) s += (int)v.size();

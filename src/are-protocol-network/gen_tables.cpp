@@ -9,8 +9,7 @@
 //   lookup_20.bin       — legacy heap-loaded format for PermXOTARE(8,4) (~420 MB heap × N!)
 //   lookup_20.mmap.bin  — flat sorted format, mmap-shared (one copy regardless of N)
 //
-// Run this once. All evaluator/client processes prefer the .mmap.bin form
-// and fall back to the legacy .bin if missing.
+// Run this once. All evaluator/client processes prefer the .mmap.bin form and fall back to the legacy .bin if missing.
 
 #include "ot/rabin_ot_are.h"
 #include "ot/string_ot_are.h"
