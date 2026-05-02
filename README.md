@@ -1,83 +1,120 @@
-# About
+# Balanced ARE Protocol
 
-This branch focuses on compiling bounded C programs into Boolean circuits. These circuits can later be used to generate garbled circuits and, ultimately, to build a balanced ARE encoding.
+Networked implementation of the Balanced ARE garbled-circuit protocol: one evaluator orchestrates `N` client processes (one per data holder) over TCP. The evaluator partitions the Bristol-format circuit, hands each client its slice, and runs the garble/OT/PXT phases end-to-end.
 
+A `--benchmark` mode sweeps `N` × `circuit` × `partition_mode` and writes per-run timing + communication metrics to CSV.
 
-## Installation
+### Layout
 
-To compile bounded C programs into Boolean circuits, you first need a bounded C implementation. As a reference example, see the oblivious sorting code at:
-
-- `src/boolean_circuit/oblivious_sort/bitonic_sort_u32.c`
-
-This branch uses the **CBMC** + **CBMC-GC-2** toolchain to translate bounded C into a **Bristol** circuit file (a text format that explicitly lists gates and wires in the Boolean circuit).
-
-### 1) Install the toolchain (Bell cluster)
-
-Run:
-
-```bash
-./install_cluster_bell_c_bounded.sh
 ```
-This script downloads/builds CBMC and CBMC-GC-2 (cached in scratch) and installs the runtime binaries under /tmp (ephemeral, node-local). You should re-run it when you start a new job/session on a different node.
-
-### 2) Activate the environment
-
-Before generating circuits, source:
-```bash
-source scripts/local/env_bell_circuit
-```
-This loads the required modules and updates PATH so cbmc and the circuit compiler are available in your current shell.
-
-### 3) Generate the boolean circuit representation
-
-Generate the boolean circuit representation from the bounded C implementation using the provided script:
-
-**Basic usage (with default 10-minute minimization timeout):**
-```bash
-./src/boolean_circuit/oblivious_sort/gen_circuit_file.sh -n 8 --unwind 16 -o build/boolean_circuits/bitonic_sort_u32_N8
+src/are-protocol-network/
+  evaluator.cpp        # orchestrator: builds circuit, partitions, runs protocol
+  client.cpp           # per-party process; connects to evaluator on base_port + id
+  gen_tables.cpp       # one-time generator for lookup_12 / lookup_20 ARE tables
+  net_serialize.h      # wire formats, partition modes, GlobalPartition
+  Makefile
+  launch.sh            # local: spawns evaluator + N clients on 127.0.0.1
+  run_benchmarks.sh    # local/cluster: one (circuit, partition) sweep over N
+  exp.slurm            # SLURM array job: 4 circuits × 4 partition modes
+  benchmark/csv/       # CSVs produced by --benchmark runs
 ```
 
-**Minimization options:**
-
-By default, the script runs circuit minimization with a 10-minute timeout. For larger circuits (e.g., N=32), the SAT-based equivalence check can take hours. You have several options:
-
-1. **Use default timeout (10 minutes)** - Minimization will stop after 10 minutes if not complete:
-   ```bash
-   ./src/boolean_circuit/oblivious_sort/gen_circuit_file.sh -n 32 --unwind 64 -o build/boolean_circuits/bitonic_sort_u32_N32
-   ```
-
-2. **Custom timeout** - Set a custom minimization timeout in minutes:
-   ```bash
-   ./src/boolean_circuit/oblivious_sort/gen_circuit_file.sh -n 32 --unwind 64 --min-timeout 30 -o build/boolean_circuits/bitonic_sort_u32_N32
-   ```
-
-3. **Skip minimization entirely** - Fastest option, but produces larger circuits:
-   ```bash
-   ./src/boolean_circuit/oblivious_sort/gen_circuit_file.sh -n 32 --unwind 64 --no-minimization -o build/boolean_circuits/bitonic_sort_u32_N32
-   ```
-
-**Note:** If minimization times out, the circuit generation continues and produces a non-minimized (but functionally correct) circuit. The `--no-minimization` option skips the SAT-based equivalence check entirely for faster generation.
-
-This will generate the circuit files in the specified output directory, including `output.gate.txt` which contains the circuit netlist.
-
-### 4) Parse and analyze the boolean circuit
-
-After generating the circuit, you can load it as a graph, partition it, and compute partitioning statistics. This is useful for understanding circuit structure and evaluating different partitioning strategies.
-
-If you are interested in how to compute statistics for the partition, please see the notebook `Notebook/boolean_circuits/oblivious_sorting.ipynb` for an example. The notebook demonstrates:
-- How to read the boolean circuit file (`output.gate.txt`) and convert it to a graph representation
-- How to run a graph partitioner (KaHIP) on the circuit graph
-- How to compute partitioning statistics such as cut size, boundary edges, and load distribution
-
-**Testing the generated circuit:**
-
-You can test the generated circuit by first creating a reference file for sorting (e.g., `reference.c`), then run:
-
-```bash
-cbmc-gc-2/bin/circuit-utils --create-tester tester.cpp --reference reference.c
+### Building Blocks
+```
+src/are-protocol/
+    ot/permxor_are.h    #Permute-XOR ARE - Wire splicing technique
+    ot/string_ot_are.h  #String OT ARE - Input transfer via ARE
+    ot/rabin_ot_are.h   #Building block for String OT ARE
 ```
 
-Then compile and run the tester to verify the circuit correctness.
+## Instructions to run the code
+### 1) Build the dependencies
 
----
+The Makefile expects `mcl` and `emp-tool` to be already built and installed under `src/utils/`:
 
+```
+src/utils/mcl/install/{include,lib}
+src/utils/emp-tool/install/{include,lib}
+```
+
+Build them once (from the project root) using each subproject's standard CMake flow before continuing.
+
+### 2) Build the binaries
+
+From `src/are-protocol-network/`:
+
+```bash
+make            # builds bin/evaluator, bin/client, bin/gen_tables
+make clean      # rm -rf bin/
+```
+
+The Makefile pins `-std=c++17 -O2 -fopenmp -march=native -maes -mpclmul -mssse3` and bakes an rpath to `utils/emp-tool/install/lib`.
+
+### 3) Generate lookup tables (once)
+
+Both binaries memory-map two precomputed ARE tables at runtime. Generate them once and leave them in `bin/`:
+
+```bash
+./bin/gen_tables .      # writes bin/lookup_{12,20}.bin and bin/lookup_{12,20}.mmap.bin
+```
+
+### 4) Run locally
+
+The simplest path — one evaluator + `N` clients on `127.0.0.1`:
+
+```bash
+bash launch.sh N [PORT] [CIRCUIT] [extra evaluator args...]
+
+# examples
+bash launch.sh 4                                # 4 clients, default treemech
+```
+
+`launch.sh` starts the evaluator in the background, spawns `N` clients, then waits.
+
+Equivalently, you can let the evaluator fork the clients itself:
+
+```bash
+./bin/evaluator --clients 4 --port 12345 --circuit gausssum --spawn-clients
+```
+
+### 5) Run a benchmark sweep
+
+`run_benchmarks.sh` runs one `(circuit, partition_mode)` pair over a range of `N`, spawning clients itself. Each invocation writes its own CSV so parallel jobs don't clobber:
+
+```bash
+bash run_benchmarks.sh CIRCUIT PARTITION_MODE [N_MIN] [N_MAX] [BASE_PORT]
+
+# examples
+bash run_benchmarks.sh lcb      topo_bal    8 512 20500
+bash run_benchmarks.sh distinct min_max_in  8 512 21000
+```
+### 6) Run on Slurm
+
+`exp.slurm` is an array job that fans out 4 circuits × 4 partition modes = 16 tasks:
+
+```bash
+sbatch exp.slurm
+```
+
+### Evaluator flags
+
+Key flags accepted by `bin/evaluator`:
+
+| Flag                       | Default       | Meaning |
+| -------------------------- | ------------- | ------- |
+| `--clients, -n`            | `2`           | Number of clients `N` |
+| `--port, -p`               | `12345`       | Base TCP port (client `i` uses `port + i`) |
+| `--circuit, -c`            | `treemech`    | One of: `treemech`, `seqsum`, `gausssum`, `treesum`, `bitonic`, `select`, `lcb`, `distinct`, `distincthist` |
+| `--partition, --part`      | `topo_bal`    | One of: `topo_bal`, `unbal`, `nonxor_bal`, `min_cut`, `min_max_in` |
+| `--unbalanced`             | —             | Shortcut for `--partition unbal` |
+| `--gamma`                  | `0.2`         | Slack for non-XOR balance constraint (paper §7) |
+| `--K`                      | `8`           | Bit-width per data value |
+| `--D`                      | `2`           | Dimensions (e.g. `lcb`, `select`) |
+| `--T`                      | `N`           | Time horizon (`treemech`, `lcb`) |
+| `--NB`                     | `8`           | Noise bit-width |
+| `--benchmark`              | off           | Sweep `N` × `circuit` × `partition` (implies `--spawn-clients`) |
+| `--spawn-clients`          | off           | Fork+exec the `N` client processes from the evaluator |
+| `--n-min`, `--n-max`       | `2`, `64`     | Benchmark sweep range; `N` doubles each step |
+| `--csv, -o`                | —             | Write per-run metrics to CSV |
+| `--exp, -e`                | auto          | Experiment name tag in the CSV |
+| `-q`                       | —             | Quiet mode |

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --account=gts-vzikas3
+#SBATCH --account=account_id
 #SBATCH --job-name=ARE-Bench
 #SBATCH --partition=cpu-amd
 #SBATCH --nodes=1
