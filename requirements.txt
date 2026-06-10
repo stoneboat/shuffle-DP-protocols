@@ -1,6 +1,10 @@
-flask==3.1.0
-requests==2.31.0
-PySocks==1.7.1
-eth-brownie==1.20.6
-numpy==2.2.1
-aioipfs==0.7.1
+flask
+requests
+PySocks
+eth-brownie
+numpy
+aioipfs
+ipykernel
+kahip
+matplotlib
+pandas

@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""
+Plot computation and communication cost for the DP selection protocol
+as a function of the number of clients (NPARTS).
+
+This script wraps the notebook logic in a reusable CLI tool.
+
+Example:
+  python scripts/boolean_circuit/plot_selection_cost_estimate.py --nparts 32 64 128 256 --num-choices 16
+"""
+
+import argparse
+import os
+import sys
+from concurrent.futures import ProcessPoolExecutor
+from typing import Iterable, List, Tuple
+
+import matplotlib
+
+# Use a non-interactive backend so the script works in headless environments
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+
+
+def _project_paths() -> Tuple[str, str, str, str]:
+    """
+    Return (project_dir, src_dir, fig_dir, data_dir).
+
+    - project_dir: repository root
+    - src_dir: Python source directory to put on sys.path
+    - fig_dir: default figure output directory
+    - data_dir: default build directory for circuit artifacts
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.abspath(os.path.join(script_dir, "..", ".."))
+    src_dir = os.path.join(project_dir, "src")
+    fig_dir = os.path.join(project_dir, "fig")
+    # data_dir = os.path.join(project_dir, "build")
+    data_dir = os.path.join('/home/wei402/Desktop/wei402_scratch/are_data', 'build')
+    return project_dir, src_dir, fig_dir, data_dir
+
+
+def _run_one(args: Tuple[int, int, str, str, str]) -> Tuple[float, float, float, float]:
+    """
+    Worker function for parallel cost computation.
+
+    Runs in a separate process when using ProcessPoolExecutor.
+    """
+    nparts, num_choices, project_dir, scripts_dir, data_dir = args
+
+    # Import here so each process can resolve the module independently
+    from boolean_circuit.utils import compute_circuit_cost
+
+    # Debug info to confirm multiprocessing vs threading
+    print(f"[worker] nparts={nparts}, python_pid={os.getpid()}", flush=True)
+
+    circuit_name = "selection"
+    out_tag = f"dp_selection_gumbel_u32_N{nparts}_D{num_choices}"
+
+    circut_args = {
+        "NPARTS": nparts,
+        "circuit_name": circuit_name,
+        "num_choices": num_choices,
+    }
+
+    dir_args = {
+        "project_dir": project_dir,
+        "scripts_dir": scripts_dir,
+        "data_dir": data_dir,
+        "out_tag": out_tag,
+    }
+
+    return compute_circuit_cost(circut_args, dir_args)
+
+
+def plot_selection_costs(
+    nparts_list: Iterable[int],
+    num_choices: int,
+    project_dir: str,
+    scripts_dir: str,
+    data_dir: str,
+    fig_dir: str,
+):
+    """
+    Compute cost stats for each NPARTS and save a comparison figure.
+
+    Returns (fig, out_path, results) where results is a dict with arrays.
+    """
+    nparts_list = list(nparts_list)
+
+    client_comp_vals: List[float] = []
+    baseline_comp_vals: List[float] = []
+    client_comm_vals: List[float] = []
+    baseline_comm_vals: List[float] = []
+
+    # Run cost estimation in parallel across NPARTS using processes.
+    worker_args = [
+        (nparts, num_choices, project_dir, scripts_dir, data_dir) for nparts in nparts_list
+    ]
+
+    max_workers = max(1, len(nparts_list))
+    max_workers = min(max_workers, 64)
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(_run_one, worker_args))
+
+    for client_comp, client_comm, baseline_comp, baseline_comm in results:
+        client_comp_vals.append(client_comp)
+        baseline_comp_vals.append(baseline_comp)
+        client_comm_vals.append(client_comm)
+        baseline_comm_vals.append(baseline_comm)
+
+    # Plot computation and communication vs NPARTS
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharex=True)
+
+    # Use log2(NPARTS) as the x-coordinate so spacing is uniform
+    x_vals = [np.log2(n) for n in nparts_list]
+
+    ax0, ax1 = axes
+    ax0.plot(x_vals, client_comp_vals, "o-", label="Ours")
+    ax0.plot(x_vals, baseline_comp_vals, "s-", label="HIKR23")
+    xticks = x_vals
+    ax0.set_xticks(xticks)
+    ax0.set_xticklabels([int(v) for v in xticks])
+    ax0.set_xlabel("log2(Number of clients)")
+    ax0.set_ylabel("Computation (s)")
+    ax0.set_title("Computation cost")
+    ax0.legend()
+
+    ax1.plot(x_vals, client_comm_vals, "o-", label="Ours")
+    ax1.plot(x_vals, baseline_comm_vals, "s-", label="HIKR23")
+    ax1.set_xticks(xticks)
+    ax1.set_xticklabels([int(v) for v in xticks])
+    ax1.set_xlabel("log2(Number of clients)")
+    ax1.set_ylabel("Bandwidth (MB)")
+    ax1.set_title("Communication cost")
+    ax1.legend()
+
+    # Joint caption under both subplots
+    caption = (
+        "Client-side computation and communication cost for the DP selection problem"
+    )
+    # Place caption slightly inside the figure and leave space at bottom
+    fig.text(0.5, 0.02, caption, ha="center")
+
+    fig.tight_layout(rect=[0, 0.06, 1, 1])
+
+    os.makedirs(fig_dir, exist_ok=True)
+    out_path = os.path.join(fig_dir, f"selection_cost_vs_nparts_D{num_choices}.png")
+    # Use bbox_inches='tight' to ensure caption text is included in the saved figure
+    fig.savefig(out_path, bbox_inches="tight")
+    print(f"Saved figure to {out_path}")
+
+    results = {
+        "nparts": nparts_list,
+        "client_comp": client_comp_vals,
+        "baseline_comp": baseline_comp_vals,
+        "client_comm": client_comm_vals,
+        "baseline_comm": baseline_comm_vals,
+    }
+
+    return fig, out_path, results
+
+
+def main(argv: Iterable[str] | None = None) -> int:
+    project_dir, src_dir, fig_dir_default, data_dir_default = _project_paths()
+    scripts_dir = os.path.join(project_dir, "scripts")
+
+    parser = argparse.ArgumentParser(
+        description="Plot DP selection cost vs number of clients (NPARTS)."
+    )
+    parser.add_argument(
+        "--nparts",
+        nargs="+",
+        type=int,
+        default=[32, 64, 128, 256],
+        help="List of NPARTS values to evaluate (default: 32 64 128 256).",
+    )
+    parser.add_argument(
+        "--num-choices",
+        type=int,
+        default=16,
+        help="Number of categories/columns per record D (default: 16).",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default=data_dir_default,
+        help=f"Directory containing build/boolean_circuits artifacts "
+        f"(default: {data_dir_default!r}).",
+    )
+    parser.add_argument(
+        "--fig-dir",
+        type=str,
+        default=fig_dir_default,
+        help=f"Directory to write figures (default: {fig_dir_default!r}).",
+    )
+    parser.add_argument(
+        "--circuit-name",
+        type=str,
+        default="selection",
+        help="Base circuit name (default: selection).",
+    )
+
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    # Ensure src is importable
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
+
+    plot_selection_costs(
+        nparts_list=args.nparts,
+        num_choices=args.num_choices,
+        project_dir=project_dir,
+        scripts_dir=scripts_dir,
+        data_dir=args.data_dir,
+        fig_dir=args.fig_dir,
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+

@@ -1,215 +1,120 @@
-# About
+# Balanced ARE Protocol
 
-This branch focuses on testing the process of sending randomized encodings from a client to an Ethereum blockchain through Tor. The implementation leverages Brownie, a Python-based Ethereum development framework, IPFS (InterPlanetary File System) for distributed file storage, and a local Ganache network to simulate both the client and the in-memory blockchain environment.
+Networked implementation of the Balanced ARE garbled-circuit protocol: one evaluator orchestrates `N` client processes (one per data holder) over TCP. The evaluator partitions the Bristol-format circuit, hands each client its slice, and runs the garble/OT/PXT phases end-to-end.
 
-In this project, the client uploads randomized encodings—which may be stored as long strings in a file—to the IPFS network. It then sends a smart contract command along with the corresponding Content Identifier (CID) of the file to an Ethereum node via Tor. The Ethereum node subsequently executes the smart contract function, storing the CID of the randomized encodings on the Ethereum blockchain.
+A `--benchmark` mode sweeps `N` × `circuit` × `partition_mode` and writes per-run timing + communication metrics to CSV.
 
----
+### Layout
 
-## Installation
-
-The experiment is tested on a Google Virtual Machine instance with an Ubuntu 22.04.5 LTS system.
-
-### Update and Upgrade Your System
-First, ensure your system is up-to-date:
-
-```bash
-sudo apt update
-sudo apt upgrade -y
+```
+src/are-protocol-network/
+  evaluator.cpp        # orchestrator: builds circuit, partitions, runs protocol
+  client.cpp           # per-party process; connects to evaluator on base_port + id
+  gen_tables.cpp       # one-time generator for lookup_12 / lookup_20 ARE tables
+  net_serialize.h      # wire formats, partition modes, GlobalPartition
+  Makefile
+  launch.sh            # local: spawns evaluator + N clients on 127.0.0.1
+  run_benchmarks.sh    # local/cluster: one (circuit, partition) sweep over N
+  exp.slurm            # SLURM array job: 4 circuits × 4 partition modes
+  benchmark/csv/       # CSVs produced by --benchmark runs
 ```
 
-### Dependencies Installation
-
-#### IPFS (InterPlanetary File System) Installation
-
-To install the IPFS daemon:
-```bash
-wget https://dist.ipfs.tech/go-ipfs/v0.14.0/go-ipfs_v0.14.0_linux-amd64.tar.gz
-tar xvfz go-ipfs_v0.14.0_linux-amd64.tar.gz
-cd go-ipfs
-sudo bash install.sh
+### Building Blocks
+```
+src/are-protocol/
+    ot/permxor_are.h    #Permute-XOR ARE - Wire splicing technique
+    ot/string_ot_are.h  #String OT ARE - Input transfer via ARE
+    ot/rabin_ot_are.h   #Building block for String OT ARE
 ```
 
-If this is the first time using IPFS, initialize it with:
-```bash
-ipfs init
+## Instructions to run the code
+### 1) Build the dependencies
+
+The Makefile expects `mcl` and `emp-tool` to be already built and installed under `src/utils/`:
+
+```
+src/utils/mcl/install/{include,lib}
+src/utils/emp-tool/install/{include,lib}
 ```
 
+Build them once (from the project root) using each subproject's standard CMake flow before continuing.
 
-#### Tor Installation
-To install Tor on your system, use the following commands:
-```bash
-sudo apt install -y tor
-```
+### 2) Build the binaries
 
-To check the Tor installation:
-```bash
-tor --version
-```
-The tested Tor version is 0.4.6.10.
-
-#### Node.js and npm Installation
-Ganache requires Node.js. Install it using the following steps:
-```bash
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
-```
-
-To check the installation:
-```bash
-node -v
-npm -v
-```
-The tested Node.js version is v18.20.5, and npm is 10.8.2.
-
-#### Ganache Installation
-Install Ganache via npm:
-```bash
-sudo npm install -g ganache
-```
-
-To check the installation:
-```bash
-ganache --version
-```
-The tested Ganache version is v7.9.2.
-
-#### Firewall Policies
-Ensure that the ports used by Tor are allowed for external access. In this example:
-- Tor relay uses ports 9051 and 9001 for listening and receiving.
-- The client uses ports 9052 and 9002.
-- Ganache RPC uses port 8545.
-
-Configure firewall rules if you are using Google Cloud:
-
-1. **Create a Firewall Rule**:
-   - Name: `allow-shuffle-project`
-   - Network: Select the appropriate VPC network (default is `default`).
-   - Direction: `Ingress`
-   - Action: `Allow`
-   - Source: Specify IP ranges (e.g., `0.0.0.0/0` for all, or restrict for security).
-   - Protocols and Ports: Specify `tcp:8540-8550,tcp:9000-9010,tcp:9050-9060`.
-
-Ensure no other rules block these ports.
-
-### Project Code Installation
-To download the code and set up the environment, use the following commands:
-
-#### Step 1: Update and Install Git
-```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install git  # Install Git if not already installed
-
-git clone https://github.com/stoneboat/shuffle-DP-protocols.git
-```
-
-#### Step 2: Set Up the Python Environment
-1. **Install Python Virtual Environment Support**:
-   ```bash
-   sudo apt install python3-venv  # Ensure the correct version of Python
-   sudo apt install python3-pip      # Install pip if not already installed
-   ```
-
-2. **Create and Activate a Virtual Environment**:
-   ```bash
-   python3 -m venv shuffleDP
-   source shuffleDP/bin/activate
-   ```
-
-3. **Navigate to the Project Directory and Install Dependencies**:
-   ```bash
-   cd shuffle-DP-protocols
-   pip install --upgrade -r requirements.txt
-   ```
-
-### Editor Configuration
-To edit the code, we recommend using JupyterLab. Use the following commands to configure:
-
-#### Install JupyterLab:
-```bash
-pip install jupyterlab
-```
-
-#### Start JupyterLab:
-```bash
-jupyter lab
-```
-
-#### Display JupyterLab URLs:
-```bash
-jupyter lab list
-```
-This will show the URL for accessing the JupyterLab web service.
-
----
-
-## Usage
-
-### Set Up IPFS Network
-Start the IPFS daemon with:
-```bash
-ipfs daemon
-```
-
-### Set Up Blockchain Network
-
-To set up a blockchain test network, follow these steps:
-
-1. Open a new shell and start the Ganache test network:
-
-   ```bash
-   ganache
-   ```
-
-2. Add the test network to Brownie:
-
-   ```bash
-   cd src/anonymous-ether
-   brownie networks add Ethereum ganache-local host=http://127.0.0.1:8545 chainid=1337
-   ```
-
-   Replace the `host` URL and `chainid` with the details of the test network you are using. In the provided batch scripts, the test network is referred to as `ganache-local`. If you use a different network name, update the scripts accordingly.
-
-### Anonymous Mining
-
-To simulate the mining process, open a new shell and run the following shell script:
-
-1. Start the Ethereum mining service:
-
-   ```bash
-   ./src/anonymous-ether/start_eth_service.sh
-   ```
-
-This script performs two main actions:
-
-- **Start a Tor process**: Uses the configuration file located at `./src/anonymous-ether/torrc`. This file sets up a hidden service on port 9001 and routes incoming messages to the local port 9001.
-- **Run a network node**: The network node (miner) listens on the configured local port (9001 in the example) via Tor, receives transactions, and processes them.
-
-### Client
-
-To send a test message from the client, open a new shell and run:
+From `src/are-protocol-network/`:
 
 ```bash
-./src/client/start_client.sh
+make            # builds bin/evaluator, bin/client, bin/gen_tables
+make clean      # rm -rf bin/
 ```
 
-### Notes
+The Makefile pins `-std=c++17 -O2 -fopenmp -march=native -maes -mpclmul -mssse3` and bakes an rpath to `utils/emp-tool/install/lib`.
 
-- The client and Miner set up separate Tor processes, each with different listening and receiving ports. Ensure all such ports are free and properly configured.
-- Configuration files:
-  - Tor client: `src/client/torrc`
-  - Tor ETH miner: `src/anonymous-ether/torrc`
-- If you are using a deploy key for project updates, configure credentials as follows:
+### 3) Generate lookup tables (once)
+
+Both binaries memory-map two precomputed ARE tables at runtime. Generate them once and leave them in `bin/`:
 
 ```bash
-# Start the SSH agent
-eval "$(ssh-agent -s)"
-
-# Add the deploy key (replace `your_deploy_key` with your actual deploy key file name)
-ssh-add ~/.ssh/your_deploy_key
-
-# Set the correct Git remote URL (replace `USERNAME` and `REPOSITORY` with your GitHub account name and repository name)
-git remote set-url origin git@github.com:USERNAME/REPOSITORY.git
+./bin/gen_tables .      # writes bin/lookup_{12,20}.bin and bin/lookup_{12,20}.mmap.bin
 ```
-Ensure you replace `your_deploy_key`, `USERNAME`, and `REPOSITORY` with your credentials and repository details.
 
+### 4) Run locally
+
+The simplest path — one evaluator + `N` clients on `127.0.0.1`:
+
+```bash
+bash launch.sh N [PORT] [CIRCUIT] [extra evaluator args...]
+
+# examples
+bash launch.sh 4                                # 4 clients, default treemech
+```
+
+`launch.sh` starts the evaluator in the background, spawns `N` clients, then waits.
+
+Equivalently, you can let the evaluator fork the clients itself:
+
+```bash
+./bin/evaluator --clients 4 --port 12345 --circuit gausssum --spawn-clients
+```
+
+### 5) Run a benchmark sweep
+
+`run_benchmarks.sh` runs one `(circuit, partition_mode)` pair over a range of `N`, spawning clients itself. Each invocation writes its own CSV so parallel jobs don't clobber:
+
+```bash
+bash run_benchmarks.sh CIRCUIT PARTITION_MODE [N_MIN] [N_MAX] [BASE_PORT]
+
+# examples
+bash run_benchmarks.sh lcb      topo_bal    8 512 20500
+bash run_benchmarks.sh distinct min_max_in  8 512 21000
+```
+### 6) Run on Slurm
+
+`exp.slurm` is an array job that fans out 4 circuits × 4 partition modes = 16 tasks:
+
+```bash
+sbatch exp.slurm
+```
+
+### Evaluator flags
+
+Key flags accepted by `bin/evaluator`:
+
+| Flag                       | Default       | Meaning |
+| -------------------------- | ------------- | ------- |
+| `--clients, -n`            | `2`           | Number of clients `N` |
+| `--port, -p`               | `12345`       | Base TCP port (client `i` uses `port + i`) |
+| `--circuit, -c`            | `treemech`    | One of: `treemech`, `seqsum`, `gausssum`, `treesum`, `bitonic`, `select`, `lcb`, `distinct`, `distincthist` |
+| `--partition, --part`      | `topo_bal`    | One of: `topo_bal`, `unbal`, `nonxor_bal`, `min_cut`, `min_max_in` |
+| `--unbalanced`             | —             | Shortcut for `--partition unbal` |
+| `--gamma`                  | `0.2`         | Slack for non-XOR balance constraint (paper §7) |
+| `--K`                      | `8`           | Bit-width per data value |
+| `--D`                      | `2`           | Dimensions (e.g. `lcb`, `select`) |
+| `--T`                      | `N`           | Time horizon (`treemech`, `lcb`) |
+| `--NB`                     | `8`           | Noise bit-width |
+| `--benchmark`              | off           | Sweep `N` × `circuit` × `partition` (implies `--spawn-clients`) |
+| `--spawn-clients`          | off           | Fork+exec the `N` client processes from the evaluator |
+| `--n-min`, `--n-max`       | `2`, `64`     | Benchmark sweep range; `N` doubles each step |
+| `--csv, -o`                | —             | Write per-run metrics to CSV |
+| `--exp, -e`                | auto          | Experiment name tag in the CSV |
+| `-q`                       | —             | Quiet mode |
