@@ -3,6 +3,7 @@
 #include <emp-tool/emp-tool.h>
 #include <vector>
 #include <cassert>
+#include <cstdint>
 
 // Build a circuit that computes the SUM of n_parties k-bit inputs.
 // Uses a BALANCED BINARY TREE of ripple-carry adders:
@@ -17,10 +18,11 @@
 // Total: N-1 adders with growing bit widths.
 // Output: k + ceil(log2(N)) bits.
 //
-inline emp::BristolFormat* buildTreeSumCircuit(int n_parties, int k_bits) {
-    assert(n_parties >= 2 && k_bits >= 1);
+inline emp::BristolFormat* buildTreeSumCircuit(int n_parties, int k_bits, int noise_bits = 0) {
+    assert(n_parties >= 2 && k_bits >= 1 && noise_bits >= 0);
 
-    int next_wire = n_parties * k_bits;
+    int total_inputs = n_parties * k_bits + noise_bits + (noise_bits > 0);
+    int next_wire = total_inputs;
     std::vector<int> gates;
 
     auto halfAdder = [&](int a, int b) -> std::pair<int, int> {
@@ -86,6 +88,30 @@ inline emp::BristolFormat* buildTreeSumCircuit(int n_parties, int k_bits) {
         operands = std::move(next_level);
     }
 
+    if (noise_bits > 0) {
+        assert(k_bits <= 30 && noise_bits <= 62);
+        auto gate = [&](int a, int b, int type) { int out = next_wire++; gates.insert(gates.end(), {a, b, out, type}); return out; };
+        auto mux = [&](int select, int a, int b) { return gate(a, gate(select, gate(a, b, XOR_GATE), AND_GATE), XOR_GATE); };
+        uint64_t max_sum = (uint64_t)n_parties * ((1ULL << k_bits) - 1);
+        int zero_wire = gate(0, 0, XOR_GATE), width = std::max((int)operands[0].size() + 1, noise_bits) + 1;
+        operands[0].resize(width, zero_wire);
+        std::vector<int> noise(width, n_parties * k_bits + noise_bits - 1);
+        for (int b = 0; b < noise_bits; b++) noise[b] = n_parties * k_bits + b;
+        operands[0] = rippleAdd(operands[0], noise);
+        operands[0].resize(width);
+        int one_wire = n_parties * k_bits + noise_bits, greater = zero_wire;
+        for (int b = 0; b < width; b++) {
+            int value = operands[0][b];
+            greater = ((max_sum >> b) & 1) ? gate(value, greater, AND_GATE) : gate(gate(value, greater, XOR_GATE), gate(value, greater, AND_GATE), XOR_GATE);
+        }
+        int nonnegative = gate(operands[0].back(), one_wire, XOR_GATE);
+        std::vector<int> clamped;
+        for (int b = 0; (max_sum >> b) != 0; b++) {
+            int limit = ((max_sum >> b) & 1) ? one_wire : zero_wire;
+            clamped.push_back(gate(mux(greater, operands[0][b], limit), nonnegative, AND_GATE));
+        }
+        operands[0] = std::move(clamped);
+    }
     // Copy result to output position
     std::vector<int>& result_wires = operands[0];
     int out_bits = (int)result_wires.size();
@@ -104,7 +130,6 @@ inline emp::BristolFormat* buildTreeSumCircuit(int n_parties, int k_bits) {
         }
     }
 
-    int total_inputs = n_parties * k_bits;
     int n_gates = (int)gates.size() / 4;
     int n_wires = next_wire;
     return new emp::BristolFormat(n_gates, n_wires, total_inputs, 0, out_bits, gates.data());

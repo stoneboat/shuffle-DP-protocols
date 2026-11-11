@@ -17,7 +17,7 @@ struct Args {
     std::string circuit = "treemech";
     int T = -1, D = 2, K = 8;  // T=-1 means auto (T=N for treemech)
     int N_sort = -1; // -1 means auto (N_sort=N)
-    int NB = 8;      // noise bits for selection
+    int NB = 8;      // noise bits
     bool balanced = true;        // legacy flag; mirrors partition_mode for back-compat
     PartitionMode partition_mode = PART_TOPOLOGICAL_BALANCED;
     bool partition_explicit = false; // true if --partition was passed
@@ -74,8 +74,13 @@ static emp::BristolFormat* buildCircuit(const Args& a) {
         return buildTreeMechanismCircuit(T, a.D, a.K);
     if (a.circuit == "seqsum")
         return buildSequentialSumCircuit(n_sort, a.K);
-    if (a.circuit == "gausssum")
-        return buildTreeSumCircuit(n_sort, a.K);
+    if (a.circuit == "gausssum") {
+        assert(n_sort >= 2 && a.K >= 1 && a.K <= 30 && a.NB >= 1 && a.NB <= 62);
+        uint64_t max_sum = (uint64_t)n_sort * ((1ULL << a.K) - 1);
+        int noise_bits = 1;
+        for (auto v = max_sum; v; v >>= 1) noise_bits++;
+        return buildTreeSumCircuit(n_sort, a.K, std::max(a.NB, noise_bits));
+    }
     if (a.circuit == "treesum")
         return buildTreeSumCircuit(n_sort, a.K);
     if (a.circuit == "bitonic")
@@ -110,20 +115,23 @@ static std::vector<int> sampleInputBits(const Args& a, emp::BristolFormat* circ,
     int K = a.K, NB = a.NB;
 
     if (a.circuit == "gausssum") {
+        NB = total_inputs - N * K - 1;
         const double epsilon = 1.0;
         const int max_val = (1 << K) - 1;
         const double delta_dp = 1.0 / ((double)N * N);
         const double sigma_central = max_val * std::sqrt(2.0 * std::log(1.25 / delta_dp)) / epsilon;
-        const double sigma_local   = sigma_central / std::sqrt((double)N);
         std::uniform_int_distribution<int> val_dist(0, max_val);
-        std::normal_distribution<double> noise_dist(0.0, sigma_local);
+        std::normal_distribution<double> noise_dist(0.0, sigma_central);
         for (int c = 0; c < N; c++) {
             int x_i = val_dist(rng);
-            double z_i = noise_dist(rng);
-            int noisy = std::clamp((int)std::round(x_i + z_i), 0, max_val);
             for (int b = 0; b < K; b++)
-                bits[c * K + b] = (noisy >> b) & 1;
+                bits[c * K + b] = (x_i >> b) & 1;
         }
+        int64_t max_sum = (int64_t)N * max_val;
+        int64_t z = (int64_t)std::clamp(std::floor(noise_dist(rng) + 0.5), -(double)max_sum, (double)max_sum);
+        uint64_t z_u = (uint64_t)z;
+        for (int b = 0; b < NB; b++) bits[N * K + b] = (z_u >> b) & 1;
+        bits.back() = 1;
         return bits;
     }
 
@@ -580,7 +588,15 @@ int main(int argc, char** argv) {
 
     // Single experiment mode
     if (args.spawn_clients) {
-        auto pids = spawnClients(args.num_clients, args.base_port, client_bin);
+        std::vector<std::string> per_client_inputs;
+        if (args.circuit == "gausssum") {
+            auto* circ = buildCircuit(args);
+            auto gp = computePartitionByMode(circ, args.num_clients, args.partition_mode, args.gamma);
+            std::mt19937 rng(2026);
+            per_client_inputs = sliceInputsPerClient(sampleInputBits(args, circ, rng), gp);
+            delete circ;
+        }
+        auto pids = spawnClients(args.num_clients, args.base_port, client_bin, per_client_inputs);
         RunResult r = runProtocol(args);
         waitForAll(pids);
 
