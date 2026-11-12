@@ -32,7 +32,7 @@ mkdir -p "$OUTPUT_DIR" logs
 # Ensure the lookup tables are accessible (working dir + bin/)
 cp bin/lookup_12.bin . 2>/dev/null || true
 
-BASE_PORT=$(( 20000 + SLURM_ARRAY_TASK_ID * 2500 ))
+BASE_PORT=$(( 4000 + SLURM_ARRAY_TASK_ID * 1500 ))
 
 # Hand all granted CPUs to OpenMP for parallel OT-ARE / PXT-ARE encoding.
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"

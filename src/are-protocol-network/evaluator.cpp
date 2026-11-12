@@ -624,7 +624,6 @@ int main(int argc, char** argv) {
                     printSummary(r);
                     all_results.push_back(std::move(r));
 
-                    port += n + 10;
                 }
             }
         }
