@@ -17,9 +17,7 @@
 //
 // Output: idx_bits = ceil(log2(d)) bits — index of the selected choice.
 //
-// Score[j] = (count[j] << noise_bits) + gumbel[j]
-// Since the shift fills lower bits with zero, this is just wire concatenation
-// (zero gates for the score construction step).
+// Score[j] = count[j] + gumbel[j]; a common noise bias preserves argmax.
 //
 // Gate counts:
 //   Popcount (d choices × tree of n 1-bit values):  d * ~n * count_bits AND gates
@@ -108,30 +106,16 @@ inline emp::BristolFormat* buildSelectionCircuit(int n_voters, int d_choices,
         counts[j] = vals[0];
     }
 
-    // ── Step 2: Score construction (count << noise_bits | gumbel) ────────────
-    //
-    // score[j] = {gumbel_bits[0..noise_bits-1], count_bits[0..count_bits-1]}
-    // This is pure wire routing — zero gates.
+    // ── Step 2: Add noise to each count ────────────────────────────────────
 
     int noise_base = n_voters * d_choices;  // where noise inputs start
     std::vector<std::vector<int>> scores(d_choices);
 
     for (int j = 0; j < d_choices; j++) {
-        std::vector<int> sc;
-        // Lower bits: Gumbel noise
+        std::vector<int> noise;
         for (int b = 0; b < noise_bits; b++)
-            sc.push_back(noise_base + j * noise_bits + b);
-        // Upper bits: count
-        for (int b = 0; b < (int)counts[j].size(); b++)
-            sc.push_back(counts[j][b]);
-        // Pad to score_bits if count is shorter
-        // (tree popcount of n values yields ceil(log2(n+1)) bits,
-        //  but for small n the result may be shorter than count_bits)
-        while ((int)sc.size() < score_bits)
-            sc.push_back(sc.back());  // sign-extend... but these are unsigned, so should pad with 0
-        // Actually for unsigned, we need a zero wire to pad. Let's just leave
-        // it at current size — the comparator handles different widths.
-        scores[j] = sc;
+            noise.push_back(noise_base + j * noise_bits + b);
+        scores[j] = rippleAdd(counts[j], noise);
     }
 
     // We need a zero wire for padding and index encoding

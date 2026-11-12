@@ -22,7 +22,7 @@ LDFLAGS   = $(MCL_DIR)/lib/libmcl.a \
             -L$(EMP_DIR)/lib -lemp-tool $(EMP_RPATH) \
             -lcrypto -lpthread
 
-HEADERS = net_serialize.h \
+HEADERS = net_serialize.h circuit_stats.h \
           $(ARE_DIR)/gc_protocol.h \
           $(ARE_DIR)/metrics.h \
           $(ARE_DIR)/ot/rabin_ot_are.h \
@@ -55,7 +55,21 @@ $(BIN_DIR)/client: client.cpp $(HEADERS) | $(BIN_DIR)
 $(BIN_DIR)/gen_tables: gen_tables.cpp $(HEADERS) | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
 
+$(BIN_DIR)/test_input_shares: $(ARE_DIR)/test/test_input_shares.cpp $(HEADERS) | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
+
+$(BIN_DIR)/test_selection: $(ARE_DIR)/test/test_selection.cpp $(HEADERS) | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
+
+$(BIN_DIR)/test_circuit_stats: $(ARE_DIR)/test/test_circuit_stats.cpp $(HEADERS) | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
+
+test: $(BIN_DIR)/test_input_shares $(BIN_DIR)/test_selection $(BIN_DIR)/test_circuit_stats
+	$(abspath $(BIN_DIR))/test_input_shares
+	$(abspath $(BIN_DIR))/test_selection
+	$(abspath $(BIN_DIR))/test_circuit_stats
+
 clean:
 	rm -rf $(BIN_DIR)
 
-.PHONY: clean all
+.PHONY: clean all test

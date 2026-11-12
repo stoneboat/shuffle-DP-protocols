@@ -21,6 +21,10 @@ struct ClientMetrics {
     size_t garbled_table_bytes  = 0;
     size_t ot_are_bytes         = 0;
     size_t boundary_are_bytes   = 0;
+    int share_count = 0;
+    double share_time_us = 0; // Included in ot_are_time_us.
+    size_t share_bytes = 0;
+    size_t share_messages = 0;
     // Actual bytes pushed over the socket (sender-side, from emp::NetIO::counter).
     // The three fields above are the analytic ARE encoding sizes; these four are
     // the real wire transfer (PXT-ARE diff is sent, but the encodings themselves
@@ -35,7 +39,7 @@ struct ClientMetrics {
         return garble_time_us + ot_are_time_us + boundary_time_us;
     }
     size_t total_bytes() const {
-        return garbled_table_bytes + ot_are_bytes + boundary_are_bytes;
+        return share_count > 0 ? wire_total_bytes : garbled_table_bytes + ot_are_bytes + boundary_are_bytes;
     }
 };
 
@@ -88,7 +92,7 @@ static const char* CSV_HEADER =
     "num_gates,num_and,num_inputs,num_boundary_in,num_boundary_out,"
     "garble_time_us,ot_are_time_us,boundary_time_us,total_time_us,"
     "garbled_table_bytes,ot_are_bytes,boundary_bytes,total_bytes,"
-    "wire_garble_bytes,wire_ot_are_bytes,wire_boundary_bytes,wire_total_bytes";
+    "wire_garble_bytes,wire_ot_are_bytes,wire_boundary_bytes,wire_total_bytes,shares_per_encoding,share_time_us,share_bytes,share_messages";
 
 static void writeCSVRow(std::ostream& out, const RunResult& r, const ClientMetrics& c) {
     out << r.experiment << ","
@@ -117,6 +121,7 @@ static void writeCSVRow(std::ostream& out, const RunResult& r, const ClientMetri
         << c.wire_ot_are_bytes << ","
         << c.wire_boundary_bytes << ","
         << c.wire_total_bytes
+        << "," << c.share_count << "," << c.share_time_us << "," << c.share_bytes << "," << c.share_messages
         << "\n";
 }
 

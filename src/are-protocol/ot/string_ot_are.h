@@ -69,6 +69,7 @@ public:
 
     int getMsgLen() const { return msg_len; }
     int getEllA() const { return rabin_ot.getEllA(); }
+    const PublicParams& getParams() const { return rabin_ot.getParams(); }
 
     // Sender encodes two messages m_0, m_1 ∈ {0,1}^msg_len.
     SenderEncoding EncodeSender(const std::vector<int>& m0,

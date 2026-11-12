@@ -1,5 +1,6 @@
 #include "net_serialize.h"
 #include "gc_protocol.h"
+#include "circuit_stats.h"
 #include <iostream>
 #include <fstream>
 #include <cstring>
@@ -7,6 +8,7 @@
 #include <random>
 #include <cmath>
 #include <algorithm>
+#include <memory>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <libgen.h>
@@ -18,6 +20,9 @@ struct Args {
     int T = -1, D = 2, K = 8;  // T=-1 means auto (T=N for treemech)
     int N_sort = -1; // -1 means auto (N_sort=N)
     int NB = 8;      // noise bits
+    int shares = 2;
+    bool circuit_stats = false;
+    std::string dump_gates;
     bool balanced = true;        // legacy flag; mirrors partition_mode for back-compat
     PartitionMode partition_mode = PART_TOPOLOGICAL_BALANCED;
     bool partition_explicit = false; // true if --partition was passed
@@ -44,6 +49,9 @@ static Args parseArgs(int argc, char** argv) {
         else if (arg == "--D" && i+1 < argc) a.D = atoi(argv[++i]);
         else if (arg == "--K" && i+1 < argc) a.K = atoi(argv[++i]);
         else if (arg == "--NB" && i+1 < argc) a.NB = atoi(argv[++i]);
+        else if (arg == "--shares" && i+1 < argc) a.shares = atoi(argv[++i]);
+        else if (arg == "--circuit-stats") a.circuit_stats = true;
+        else if (arg == "--dump-gates" && i+1 < argc) { a.dump_gates = argv[++i]; a.circuit_stats = true; }
         else if (arg == "--unbalanced") {
             a.balanced = false;
             a.partition_mode = PART_UNBALANCED;
@@ -63,6 +71,7 @@ static Args parseArgs(int argc, char** argv) {
         else if (arg == "--n-min" && i+1 < argc) a.n_min = atoi(argv[++i]);
         else if (arg == "--n-max" && i+1 < argc) a.n_max = atoi(argv[++i]);
     }
+    if (a.shares < 1) throw std::invalid_argument("--shares must be positive");
     return a;
 }
 
@@ -159,7 +168,7 @@ static std::vector<int> sampleInputBits(const Args& a, emp::BristolFormat* circ,
     }
 
     if (a.circuit == "select") {
-        // One-hot votes + Gumbel-per-choice sampled in plaintext, biased into
+        // One-hot votes + Gumbel(0, 2/epsilon), biased into unsigned NB bits.
         const double epsilon = 1.0;
         const int D = a.D;
         const int noise_mid = 1 << (NB - 1);
@@ -171,12 +180,11 @@ static std::vector<int> sampleInputBits(const Args& a, emp::BristolFormat* circ,
             bits[i * D + pick] = 1;
         }
         for (int j = 0; j < D; j++) {
-            double g = -std::log(-std::log(u01(rng))) / epsilon;
+            double g = -2.0 * std::log(-std::log(u01(rng))) / epsilon;
             int g_u = std::clamp((int)std::round(g + noise_mid), 0, noise_max);
             for (int b = 0; b < NB; b++)
                 bits[N * D + j * NB + b] = (g_u >> b) & 1;
         }
-        bits[N * D + D * NB] = 1;  // constant-1
         return bits;
     }
 
@@ -288,6 +296,7 @@ static RunResult runProtocol(const Args& args) {
     // ── Phase 0: Send partition info to each client ─────────────────────────
     for (int c = 0; c < N; c++) {
         PartitionInfo pi = makePartitionInfo(gp, circ, c);
+        pi.shares = args.shares;
         sendPartitionInfo(ios[c], pi);
         ios[c]->flush();
     }
@@ -384,8 +393,11 @@ static RunResult runProtocol(const Args& args) {
             int wire_id = recvInt(ios[c]);
             OTWireEncs owe;
             for (int b = 0; b < 16; b++) {
-                owe.se[b] = recvSenderEncoding(ios[c]);
-                owe.re[b] = recvReceiverEncoding(ios[c]);
+                if (args.shares > 1) recvInputEncodingShares(ios[c], owe.se[b], owe.re[b], (uint64_t)wire_id * 16 + b, args.shares);
+                else {
+                    owe.se[b] = recvSenderEncoding(ios[c]);
+                    owe.re[b] = recvReceiverEncoding(ios[c]);
+                }
             }
             ot_encs[wire_id] = owe;
         }
@@ -517,6 +529,28 @@ int main(int argc, char** argv) {
     Args args = parseArgs(argc, argv);
     args.self_path = argv[0];
     std::string client_bin = getClientPath(args.self_path);
+
+    if (args.circuit_stats) {
+        std::unique_ptr<emp::BristolFormat> circuit(buildCircuit(args));
+        auto stats = circuitFanoutStats(*circuit);
+        auto write = [&](std::ostream& out) {
+            out << "circuit,N,K,D,T,NB_requested," << CIRCUIT_STATS_HEADER << '\n';
+            out << args.circuit << ',' << args.num_clients << ',' << args.K << ',' << args.D << ',' << (args.T > 0 ? args.T : args.num_clients) << ',' << args.NB << ',';
+            writeCircuitStatsRow(out, *circuit, stats);
+        };
+        write(std::cout);
+        if (!args.csv_file.empty()) {
+            std::ofstream out(args.csv_file);
+            if (!out) throw std::runtime_error("Cannot open circuit stats CSV");
+            write(out);
+        }
+        if (!args.dump_gates.empty()) {
+            std::ofstream out(args.dump_gates);
+            if (!out) throw std::runtime_error("Cannot open gate dump CSV");
+            writeCircuitGates(out, *circuit, stats);
+        }
+        return 0;
+    }
 
     if (args.benchmark) {
         args.spawn_clients = true;

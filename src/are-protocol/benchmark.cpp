@@ -347,8 +347,7 @@ int main(int argc, char** argv) {
     // ── Experiment 13: Selection (Gumbel-max), d=8, noise_bits=8, vary N ───
     // DP selection via report-noisy-max: n voters each pick one of d choices
     // (one-hot). Noise per choice = standard Gumbel sampled in plaintext,
-    // scaled by 1/ε, biased + clamped into unsigned NB-bit for in-circuit
-    // unsigned comparison. Last input wire is constant 1 (required by circuit).
+    // scaled by 2/ε, biased + clamped into unsigned NB-bit for in-circuit comparison.
     if (only_exp == 0 || only_exp == 13) {
         const int D = 8, NB = 8;
         const double epsilon = 1.0;
@@ -359,7 +358,7 @@ int main(int argc, char** argv) {
         std::uniform_real_distribution<double> u01(1e-12, 1.0);
         const int noise_mid = 1 << (NB - 1);
         const int noise_max = (1 << NB) - 1;
-        auto gumbel = [&]() { return -std::log(-std::log(u01(rng))) / epsilon; };
+        auto gumbel = [&]() { return -2.0 * std::log(-std::log(u01(rng))) / epsilon; };
 
         for (int n : {2, 4, 8, 16, 32}) {
             auto* circ = buildSelectionCircuit(n, D, NB);
@@ -370,7 +369,7 @@ int main(int argc, char** argv) {
                       << circ->n3 << " output bits]" << std::endl;
 
             std::uniform_int_distribution<int> choice_dist(0, D - 1);
-            std::vector<int> input_bits(n * D + D * NB + 1, 0);
+            std::vector<int> input_bits(n * D + D * NB, 0);
             for (int i = 0; i < n; i++) {
                 int pick = choice_dist(rng);
                 input_bits[i * D + pick] = 1;
@@ -380,7 +379,6 @@ int main(int argc, char** argv) {
                 for (int b = 0; b < NB; b++)
                     input_bits[n * D + j * NB + b] = (g_u >> b) & 1;
             }
-            input_bits[n * D + D * NB] = 1;  // constant-1 wire
 
             for (bool bal : {true, false}) {
                 std::string exp = "exp13_select_N" + std::to_string(n) +
@@ -402,7 +400,7 @@ int main(int argc, char** argv) {
         std::uniform_real_distribution<double> u01(1e-12, 1.0);
         const int noise_mid = 1 << (NB - 1);
         const int noise_max = (1 << NB) - 1;
-        auto gumbel = [&]() { return -std::log(-std::log(u01(rng))) / epsilon; };
+        auto gumbel = [&]() { return -2.0 * std::log(-std::log(u01(rng))) / epsilon; };
 
         for (int d : {2, 4, 8, 16, 32}) {
             auto* circ = buildSelectionCircuit(N, d, NB);
@@ -413,7 +411,7 @@ int main(int argc, char** argv) {
                       << circ->n3 << " output bits]" << std::endl;
 
             std::uniform_int_distribution<int> choice_dist(0, d - 1);
-            std::vector<int> input_bits(N * d + d * NB + 1, 0);
+            std::vector<int> input_bits(N * d + d * NB, 0);
             for (int i = 0; i < N; i++) {
                 int pick = choice_dist(rng);
                 input_bits[i * d + pick] = 1;
@@ -423,7 +421,6 @@ int main(int argc, char** argv) {
                 for (int b = 0; b < NB; b++)
                     input_bits[N * d + j * NB + b] = (g_u >> b) & 1;
             }
-            input_bits[N * d + d * NB] = 1;  // constant-1 wire
 
             for (bool bal : {true, false}) {
                 std::string exp = "exp14_select_D" + std::to_string(d) +

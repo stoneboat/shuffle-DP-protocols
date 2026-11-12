@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cassert>
+#include <stdexcept>
 #include "ot/rabin_ot_are.h"
 #include "ot/string_ot_are.h"
 #include "ot/permxor_are.h"
@@ -45,6 +46,7 @@ static constexpr size_t ENCODED_DATA_SIZE = G1_SERIAL_SIZE + G2_SERIAL_SIZE + GT
 
 // ── Partition information sent to each client ───────────────────────────────
 struct PartitionInfo {
+    int shares = 2;
     int num_clients;
     int client_id;
     int total_inputs;
@@ -686,10 +688,82 @@ inline ReceiverEncoding recvReceiverEncoding(emp::NetIO* io) {
     return re;
 }
 
+static constexpr size_t INPUT_SHARE_BYTES = sizeof(uint64_t) + 4 * ENCODED_DATA_SIZE + sizeof(uint32_t);
+
+template<typename IO>
+inline void sendInputEncodingShares(IO* io, const SenderEncoding& se, const ReceiverEncoding& re, uint64_t tag, int shares, const PublicParams& pp) {
+    if (shares < 1) throw std::invalid_argument("Share count must be positive");
+    EncodedData remaining[4] = {se.enc1, se.enc2, re.enc1, re.enc2};
+    uint32_t remaining_c = se.c;
+    emp::PRG prg;
+    for (int s = 0; s < shares; s++) {
+        char buffer[INPUT_SHARE_BYTES];
+        memcpy(buffer, &tag, sizeof(tag));
+        size_t offset = sizeof(tag);
+        for (auto& value : remaining) {
+            EncodedData share = value;
+            if (s + 1 < shares) {
+                Fr r;
+                r.setByCSPRNG(); G1::mul(share.part1, pp.g1, r);
+                r.setByCSPRNG(); G2::mul(share.part2, pp.g2, r);
+                r.setByCSPRNG(); GT::pow(share.part3, pp.gT, r);
+                G1::sub(value.part1, value.part1, share.part1);
+                G2::sub(value.part2, value.part2, share.part2);
+                GT inverse;
+                GT::inv(inverse, share.part3);
+                GT::mul(value.part3, value.part3, inverse);
+            }
+            offset += share.part1.serialize(buffer + offset, G1_SERIAL_SIZE);
+            offset += share.part2.serialize(buffer + offset, G2_SERIAL_SIZE);
+            offset += share.part3.serialize(buffer + offset, GT_SERIAL_SIZE);
+        }
+        uint32_t c = remaining_c;
+        if (s + 1 < shares) { prg.random_data(&c, sizeof(c)); remaining_c ^= c; }
+        if (offset != INPUT_SHARE_BYTES - sizeof(c)) throw std::runtime_error("Invalid share size");
+        memcpy(buffer + offset, &c, sizeof(c));
+        io->send_data(buffer, sizeof(buffer));
+    }
+}
+
+template<typename IO>
+inline void recvInputEncodingShares(IO* io, SenderEncoding& se, ReceiverEncoding& re, uint64_t expected_tag, int shares) {
+    if (shares < 1) throw std::invalid_argument("Share count must be positive");
+    EncodedData sum[4];
+    for (auto& value : sum) { value.part1.clear(); value.part2.clear(); value.part3.setOne(); }
+    uint32_t c = 0;
+    for (int s = 0; s < shares; s++) {
+        char buffer[INPUT_SHARE_BYTES];
+        io->recv_data(buffer, sizeof(buffer));
+        uint64_t tag;
+        memcpy(&tag, buffer, sizeof(tag));
+        if (tag != expected_tag) throw std::runtime_error("Unexpected input share tag");
+        size_t offset = sizeof(tag);
+        for (auto& value : sum) {
+            EncodedData share;
+            if (share.part1.deserialize(buffer + offset, G1_SERIAL_SIZE) != G1_SERIAL_SIZE) throw std::runtime_error("Invalid G1 share");
+            offset += G1_SERIAL_SIZE;
+            if (share.part2.deserialize(buffer + offset, G2_SERIAL_SIZE) != G2_SERIAL_SIZE) throw std::runtime_error("Invalid G2 share");
+            offset += G2_SERIAL_SIZE;
+            if (share.part3.deserialize(buffer + offset, GT_SERIAL_SIZE) != GT_SERIAL_SIZE || !isValidGT(share.part3)) throw std::runtime_error("Invalid GT share");
+            offset += GT_SERIAL_SIZE;
+            G1::add(value.part1, value.part1, share.part1);
+            G2::add(value.part2, value.part2, share.part2);
+            GT::mul(value.part3, value.part3, share.part3);
+        }
+        uint32_t share_c;
+        memcpy(&share_c, buffer + offset, sizeof(share_c));
+        c ^= share_c;
+    }
+    if (c > 1) throw std::runtime_error("Invalid reconstructed sender bit");
+    se = {sum[0], sum[1], (int)c};
+    re = {sum[2], sum[3]};
+}
+
 // ── PartitionInfo send/recv ─────────────────────────────────────────────────
 
 inline void sendPartitionInfo(emp::NetIO* io, const PartitionInfo& pi) {
     sendInt(io, pi.num_clients);
+    sendInt(io, pi.shares);
     sendInt(io, pi.client_id);
     sendInt(io, pi.total_inputs);
     sendInt(io, pi.num_wires);
@@ -722,6 +796,8 @@ inline void sendPartitionInfo(emp::NetIO* io, const PartitionInfo& pi) {
 inline PartitionInfo recvPartitionInfo(emp::NetIO* io) {
     PartitionInfo pi;
     pi.num_clients = recvInt(io);
+    pi.shares = recvInt(io);
+    if (pi.shares < 1) throw std::invalid_argument("Share count must be positive");
     pi.client_id = recvInt(io);
     pi.total_inputs = recvInt(io);
     pi.num_wires = recvInt(io);
@@ -802,15 +878,16 @@ inline BoundaryResultMsg recvBoundaryResult(emp::NetIO* io) {
 // ── ClientMetrics send/recv ─────────────────────────────────────────────────
 
 inline void sendClientMetrics(emp::NetIO* io, const ClientMetrics& cm) {
+    sendInt(io, cm.share_count);
     sendInt(io, cm.client_id);
     sendInt(io, cm.num_gates);
     sendInt(io, cm.num_and_gates);
     sendInt(io, cm.num_input_wires);
     sendInt(io, cm.num_boundary_in);
     sendInt(io, cm.num_boundary_out);
-    double times[3] = {cm.garble_time_us, cm.ot_are_time_us, cm.boundary_time_us};
+    double times[4] = {cm.garble_time_us, cm.ot_are_time_us, cm.boundary_time_us, cm.share_time_us};
     io->send_data(times, sizeof(times));
-    size_t bytes[3] = {cm.garbled_table_bytes, cm.ot_are_bytes, cm.boundary_are_bytes};
+    size_t bytes[5] = {cm.garbled_table_bytes, cm.ot_are_bytes, cm.boundary_are_bytes, cm.share_bytes, cm.share_messages};
     io->send_data(bytes, sizeof(bytes));
     size_t wire[4] = {cm.wire_garble_bytes, cm.wire_ot_are_bytes,
                       cm.wire_boundary_bytes, cm.wire_total_bytes};
@@ -819,22 +896,26 @@ inline void sendClientMetrics(emp::NetIO* io, const ClientMetrics& cm) {
 
 inline ClientMetrics recvClientMetrics(emp::NetIO* io) {
     ClientMetrics cm;
+    cm.share_count = recvInt(io);
     cm.client_id = recvInt(io);
     cm.num_gates = recvInt(io);
     cm.num_and_gates = recvInt(io);
     cm.num_input_wires = recvInt(io);
     cm.num_boundary_in = recvInt(io);
     cm.num_boundary_out = recvInt(io);
-    double times[3];
+    double times[4];
     io->recv_data(times, sizeof(times));
     cm.garble_time_us = times[0];
     cm.ot_are_time_us = times[1];
     cm.boundary_time_us = times[2];
-    size_t bytes[3];
+    cm.share_time_us = times[3];
+    size_t bytes[5];
     io->recv_data(bytes, sizeof(bytes));
     cm.garbled_table_bytes = bytes[0];
     cm.ot_are_bytes = bytes[1];
     cm.boundary_are_bytes = bytes[2];
+    cm.share_bytes = bytes[3];
+    cm.share_messages = bytes[4];
     size_t wire[4];
     io->recv_data(wire, sizeof(wire));
     cm.wire_garble_bytes   = wire[0];

@@ -94,6 +94,7 @@ int main(int argc, char** argv) {
     // Metrics
     ClientMetrics metrics;
     metrics.client_id = c;
+    metrics.share_count = pi.shares;
     metrics.num_gates = pi.gate_end - pi.gate_start;
     metrics.num_input_wires = n_inputs;
     metrics.num_boundary_in = (int)pi.boundary_in.size();
@@ -314,8 +315,15 @@ int main(int argc, char** argv) {
         for (int i = 0; i < n_inputs; i++) {
             sendInt(io, inp_encs[i].w);
             for (int j = 0; j < 16; j++) {
-                sendSenderEncoding(io, inp_encs[i].se[j]);
-                sendReceiverEncoding(io, inp_encs[i].re[j]);
+                if (pi.shares > 1) {
+                    ScopedTimer share_t(metrics.share_time_us);
+                    sendInputEncodingShares(io, inp_encs[i].se[j], inp_encs[i].re[j], (uint64_t)inp_encs[i].w * 16 + j, pi.shares, ot_input.getParams());
+                    metrics.share_messages += pi.shares;
+                    metrics.share_bytes += pi.shares * INPUT_SHARE_BYTES;
+                } else {
+                    sendSenderEncoding(io, inp_encs[i].se[j]);
+                    sendReceiverEncoding(io, inp_encs[i].re[j]);
+                }
             }
         }
         metrics.ot_are_bytes      += (size_t)n_inputs * 16 * (2 * 480 + 2 * 480);
