@@ -107,4 +107,12 @@ public:
             std::vector<int>(y.begin(), y.begin() + ell_A), std::vector<int>(y.begin() + ell_A, y.end())
         };
     }
+
+    std::pair<std::vector<int>, std::vector<int>> DecodeAggregated(const EncodedData& first, const EncodedData& second, const std::vector<int>& xor_part) {
+        assert((int)xor_part.size() == 2 * ell_A);
+        auto decoded = ot.DecodeAggregated(first, second);
+        if (decoded.empty()) return {{}, {}};
+        auto y = xorVec(xor_part, decoded);
+        return {std::vector<int>(y.begin(), y.begin() + ell_A), std::vector<int>(y.begin() + ell_A, y.end())};
+    }
 };

@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cstring>
 #include <memory>
+#include <array>
 #include <random>
 #ifdef _OPENMP
 #include <omp.h>
@@ -58,17 +59,6 @@ int main(int argc, char** argv) {
     StringOTARE ot_input(8, 4);
     ot_input.Setup(/*build_table=*/false);
 
-    PermXOTARE pxt_boundary(8, 4);
-    pxt_boundary.Setup(/*build_table=*/false);
-    if (c > 0 && !pi.boundary_in.empty()) {
-        if (!pxt_boundary.LoadTableMmap("bin/lookup_20.mmap.bin")) {
-            if (!pxt_boundary.LoadTable("bin/lookup_20.bin")) {
-                std::cerr << "[Client " << c << "] bin/lookup_20 table not found, building..." << std::endl;
-                pxt_boundary.Setup(/*build_table=*/true);
-            }
-        }
-    }
-
     int n_inputs = pi.inp_end - pi.inp_start;
     std::vector<emp::block> W0_inputs(n_inputs);
     if (n_inputs > 0) {
@@ -102,89 +92,56 @@ int main(int argc, char** argv) {
     uint64_t wire_snap_start = io->counter;
 
     // ── Phase 1: Boundary handling (as consumer) ────────────────────────────
-    if (c > 0) {
+    int nthreads = 1;
+#ifdef _OPENMP
+    nthreads = omp_get_max_threads();
+#endif
+    std::vector<std::unique_ptr<PermXOTARE>> pxt_pool(nthreads);
+    {
         int n_boundary = recvInt(io);
-        if (n_boundary > 0) {
-            ScopedTimer bt(metrics.boundary_time_us);
-
-            // Receive all hash infos serially first, then parallelize the
-            // PXT-ARE encode/decode work across them.
-            std::vector<BoundaryHashInfo> bhs(n_boundary);
-            for (int i = 0; i < n_boundary; i++)
-                bhs[i] = recvBoundaryHashInfo(io);
-
-            std::vector<BoundaryResultMsg> results(n_boundary);
-            std::vector<emp::block> W0_dsts(n_boundary);
-            int nthreads = 1;
-        #ifdef _OPENMP
-            nthreads = omp_get_max_threads();
-        #endif
-            std::vector<std::unique_ptr<PermXOTARE>> pxt_pool(nthreads);
-            for (int t = 0; t < nthreads; t++) {
-                pxt_pool[t] = std::unique_ptr<PermXOTARE>(new PermXOTARE(8, 4));
-                pxt_pool[t]->Setup(/*build_table=*/false);
-                if (!pxt_pool[t]->LoadTableMmap("bin/lookup_20.mmap.bin", /*quiet=*/true))
-                    pxt_pool[t]->LoadTable("bin/lookup_20.bin");
+        if (n_boundary != (int)pi.boundary_in.size()) throw std::runtime_error("Boundary count mismatch");
+        ScopedTimer bt(metrics.boundary_time_us);
+        if (n_boundary || !pi.boundary_out.empty()) {
+            for (auto& pxt : pxt_pool) {
+                pxt.reset(new PermXOTARE(8, 4));
+                pxt->Setup(/*build_table=*/false);
             }
-
-            #pragma omp parallel num_threads(nthreads)
-            {
-                int tid = 0;
-            #ifdef _OPENMP
-                tid = omp_get_thread_num();
-            #endif
-                PermXOTARE& local_pxt = *pxt_pool[tid];
-
-                #pragma omp for schedule(dynamic, 4)
-                for (int i = 0; i < n_boundary; i++) {
-                    const BoundaryHashInfo& bh = bhs[i];
+        }
+        if (n_boundary > 0) {
+            sendInt(io, n_boundary);
+            for (int base = 0; base < n_boundary; base += 128) {
+                int count = std::min(128, n_boundary - base);
+                std::vector<std::array<PXTSenderEnc,16>> encs(count);
+                std::vector<emp::block> W0_dsts(count);
+                #pragma omp parallel for num_threads(nthreads) schedule(dynamic, 4)
+                for (int i = 0; i < count; i++) {
+                    int tid = 0;
+                #ifdef _OPENMP
+                    tid = omp_get_thread_num();
+                #endif
                     emp::PRG prg_bnd;
-                    emp::block W0_dst;
-                    prg_bnd.random_block(&W0_dst, 1);
-                    emp::block W1_dst = W0_dst ^ delta;
-
-                    uint8_t raw_dst0[16], raw_dst1[16], raw_HKp0[16], raw_HKp1[16];
-                    uint8_t diff0[16], diff1[16];
-                    memcpy(raw_dst0, &W0_dst, 16);
+                    prg_bnd.random_block(&W0_dsts[i], 1);
+                    emp::block W1_dst = W0_dsts[i] ^ delta;
+                    uint8_t raw_dst0[16], raw_dst1[16];
+                    memcpy(raw_dst0, &W0_dsts[i], 16);
                     memcpy(raw_dst1, &W1_dst, 16);
-                    memcpy(raw_HKp0, &bh.H_Kp0, 16);
-                    memcpy(raw_HKp1, &bh.H_Kp1, 16);
-
+                    for (int j = 0; j < 16; j++) encs[i][j] = pxt_pool[tid]->EncodeSender(byteToBits(raw_dst0[j]), byteToBits(raw_dst1[j]));
+                }
+                for (int i = 0; i < count; i++) {
+                    int wire = pi.boundary_in[base + i].first;
+                    W0_wire[wire] = W0_dsts[i];
+                    sendInt(io, wire);
                     for (int j = 0; j < 16; j++) {
-                        auto s0  = byteToBits(raw_dst0[j]);
-                        auto s1  = byteToBits(raw_dst1[j]);
-                        auto s0p = byteToBits(raw_HKp0[j]);
-                        auto s1p = byteToBits(raw_HKp1[j]);
-
-                        auto se = local_pxt.EncodeSender(s0, s1);
-                        auto re = local_pxt.EncodeReceiver(bh.perm_bit ? 1 : 0, s0p, s1p);
-                        auto [first, second] = local_pxt.Decode(se, re);
-                        assert(!first.empty() && !second.empty());
-                        diff0[j] = bitsToUint8(first);
-                        diff1[j] = bitsToUint8(second);
+                        const auto& se = encs[i][j];
+                        sendBoundaryEncodingShares(io, se.ot_enc.enc1, se.ot_enc.enc2, packBoundaryMask(se.r), boundaryShareTag(c, wire, j, pi.num_wires), pi.shares, ot_input.getParams(), metrics);
                     }
-                    W0_dsts[i] = W0_dst;
-                    BoundaryResultMsg br;
-                    br.wire_id = bh.wire_id;
-                    memcpy(&br.xor_diff_0, diff0, 16);
-                    memcpy(&br.xor_diff_1, diff1, 16);
-                    br.perm_bit = bh.perm_bit;
-                    results[i] = br;
                 }
             }
-
-            metrics.boundary_are_bytes += (size_t)n_boundary * 16 * (2 * 480 + 2 * 480);
-            for (int i = 0; i < n_boundary; i++)
-                W0_wire[bhs[i].wire_id] = W0_dsts[i];
-
-            // Send all boundary results back to evaluator
-            sendInt(io, (int)results.size());
-            for (auto& br : results)
-                sendBoundaryResult(io, br);
+            metrics.boundary_are_bytes += (size_t)n_boundary * 16 * 2 * ENCODED_DATA_SIZE;
             io->flush();
         }
-        recvInt(io);
     }
+    recvInt(io);
     uint64_t wire_snap_after_boundary_consumer = io->counter;
     metrics.wire_boundary_bytes = wire_snap_after_boundary_consumer - wire_snap_start;
 
@@ -228,31 +185,42 @@ int main(int argc, char** argv) {
     metrics.wire_garble_bytes = io->counter - wire_snap_before_garble_send;
 
     // ── Send boundary producer data ─────────────────────────────────────────
-    // For each wire this client produces that is needed by a later client
-    std::vector<BoundaryHashInfo> prod_data;
-    {
-        // Collect unique boundary wires this client produces
-        std::set<int> prod_wires;
-        for (auto& [wire_id, consumer] : pi.boundary_out)
-            prod_wires.insert(wire_id);
-
-        for (int w : prod_wires) {
-            BoundaryHashInfo bh;
-            bh.wire_id = w;
-            emp::block W0_w = W0_wire[w];
-            bh.perm_bit = emp::getLSB(W0_w);
-            emp::block Kp0 = bh.perm_bit ? (W0_w ^ delta) : W0_w;
-            emp::block Kp1 = bh.perm_bit ? W0_w : (W0_w ^ delta);
-            bh.H_Kp0 = hashBlock(Kp0);
-            bh.H_Kp1 = hashBlock(Kp1);
-            prod_data.push_back(bh);
-        }
-    }
     uint64_t wire_snap_before_producer = io->counter;
-    sendInt(io, (int)prod_data.size());
-    for (auto& bh : prod_data)
-        sendBoundaryHashInfo(io, bh);
-    // Producer-side boundary bytes are still part of the boundary-handshake
+    {
+        ScopedTimer bt(metrics.boundary_time_us);
+        int n_prod = (int)pi.boundary_out.size();
+        sendInt(io, n_prod);
+        for (int base = 0; base < n_prod; base += 128) {
+            int count = std::min(128, n_prod - base);
+            std::vector<std::array<PXTReceiverEnc,16>> encs(count);
+            #pragma omp parallel for num_threads(nthreads) schedule(dynamic, 4)
+            for (int i = 0; i < count; i++) {
+                int tid = 0;
+            #ifdef _OPENMP
+                tid = omp_get_thread_num();
+            #endif
+                int wire = pi.boundary_out[base + i].first;
+                emp::block W0_w = W0_wire.at(wire);
+                int perm_bit = emp::getLSB(W0_w);
+                emp::block H_Kp0 = hashBlock(perm_bit ? (W0_w ^ delta) : W0_w);
+                emp::block H_Kp1 = hashBlock(perm_bit ? W0_w : (W0_w ^ delta));
+                uint8_t raw_HKp0[16], raw_HKp1[16];
+                memcpy(raw_HKp0, &H_Kp0, 16);
+                memcpy(raw_HKp1, &H_Kp1, 16);
+                for (int j = 0; j < 16; j++) encs[i][j] = pxt_pool[tid]->EncodeReceiver(perm_bit, byteToBits(raw_HKp0[j]), byteToBits(raw_HKp1[j]));
+            }
+            for (int i = 0; i < count; i++) {
+                auto [wire, consumer] = pi.boundary_out[base + i];
+                sendInt(io, wire);
+                sendInt(io, consumer);
+                for (int j = 0; j < 16; j++) {
+                    const auto& re = encs[i][j];
+                    sendBoundaryEncodingShares(io, re.ot_enc.enc1, re.ot_enc.enc2, packBoundaryMask(re.s_concat), boundaryShareTag(consumer, wire, j, pi.num_wires), pi.shares, ot_input.getParams(), metrics);
+                }
+            }
+        }
+        metrics.boundary_are_bytes += (size_t)n_prod * 16 * 2 * ENCODED_DATA_SIZE;
+    }
     metrics.wire_boundary_bytes += io->counter - wire_snap_before_producer;
 
     // ── Send output W0 labels ───────────────────────────────────────────────

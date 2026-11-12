@@ -112,7 +112,10 @@ public:
         G1::add(sum2.part1, se.enc2.part1, re.enc2.part1);
         G2::add(sum2.part2, se.enc2.part2, re.enc2.part2);
         GT::mul(sum2.part3, se.enc2.part3, re.enc2.part3);
+        return DecodeAggregated(sum1, sum2);
+    }
 
+    std::vector<int> DecodeAggregated(const EncodedData& sum1, const EncodedData& sum2) {
         std::vector<int> y1 = rabin_ot.Decode(sum1);
         std::vector<int> y2 = rabin_ot.Decode(sum2);
 

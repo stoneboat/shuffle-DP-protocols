@@ -308,7 +308,6 @@ static RunResult runProtocol(const Args& args) {
     if (args.verbose) std::cout << "[Evaluator] Delta+seed derived locally." << std::endl;
 
     // ── Phase 1: Sequential garbling with boundary coordination ─────────────
-    std::map<int, BoundaryHashInfo> boundary_hash_store;
     std::map<std::pair<int,int>, BoundaryTransferResult> boundary_transfers;
     std::vector<emp::block> all_garbled_tables;
     std::map<int, emp::block> output_W0;
@@ -329,40 +328,53 @@ static RunResult runProtocol(const Args& args) {
         }
     }
 
+    PermXOTARE pxt_decode(8, 4);
+    pxt_decode.Setup(/*build_table=*/false);
+    if (totalBoundaryPins(gp)) pxt_decode.LoadOrBuild("bin/lookup_20.mmap.bin", "bin/lookup_20.bin");
+    struct BoundaryWireEncoding { BoundaryEncodingSum bytes[16]; int contributors = 0; };
+    std::map<std::pair<int,int>, BoundaryWireEncoding> boundary_encs;
+    double boundary_decode_us = 0;
+    auto receive_boundary = [&](emp::NetIO* io, int consumer, int wire) {
+        auto key = std::make_pair(consumer, wire);
+        auto& sums = boundary_encs[key];
+        for (int j = 0; j < 16; j++) recvBoundaryEncodingShares(io, sums.bytes[j], boundaryShareTag(consumer, wire, j, circ->num_wire), args.shares);
+        if (++sums.contributors != 2) return;
+        ScopedTimer timer(boundary_decode_us);
+        uint8_t diff0[16], diff1[16];
+        for (int j = 0; j < 16; j++) {
+            auto& sum = sums.bytes[j];
+            std::vector<int> mask(16);
+            for (int bit = 0; bit < 16; bit++) mask[bit] = (sum.mask >> bit) & 1;
+            auto [first, second] = pxt_decode.DecodeAggregated(sum.enc[0], sum.enc[1], mask);
+            if (first.empty() || second.empty()) throw std::runtime_error("Boundary ARE decode failed");
+            diff0[j] = bitsToUint8(first);
+            diff1[j] = bitsToUint8(second);
+        }
+        BoundaryTransferResult transfer{};
+        memcpy(&transfer.xor_diff_0, diff0, 16);
+        memcpy(&transfer.xor_diff_1, diff1, 16);
+        boundary_transfers[key] = transfer;
+        boundary_encs.erase(key);
+    };
+
     for (int c = 0; c < N; c++) {
         if (args.verbose)
             std::cout << "[Evaluator] Processing client " << c << "..." << std::endl;
 
-        // ── Boundary: relay hash info to consumer, receive results ───────
-        if (c > 0 && !gp.boundary_in[c].empty()) {
-            sendInt(ios[c], (int)gp.boundary_in[c].size());
-            for (auto& [wire_id, producer] : gp.boundary_in[c]) {
-                auto it = boundary_hash_store.find(wire_id);
-                assert(it != boundary_hash_store.end());
-                sendBoundaryHashInfo(ios[c], it->second);
-            }
-            ios[c]->flush();
-
+        // ── Receive boundary consumer shares ────────────────────────────
+        sendInt(ios[c], (int)gp.boundary_in[c].size());
+        ios[c]->flush();
+        if (!gp.boundary_in[c].empty()) {
             int n_results = recvInt(ios[c]);
-            for (int i = 0; i < n_results; i++) {
-                BoundaryResultMsg br = recvBoundaryResult(ios[c]);
-                BoundaryTransferResult bt;
-                bt.xor_diff_0 = br.xor_diff_0;
-                bt.xor_diff_1 = br.xor_diff_1;
-                bt.perm_bit = br.perm_bit;
-                bt.W0_dst = emp::zero_block;
-                bt.W1_dst = emp::zero_block;
-                boundary_transfers[{c, br.wire_id}] = bt;
+            if (n_results != (int)gp.boundary_in[c].size()) throw std::runtime_error("Boundary count mismatch");
+            for (const auto& [expected_wire, producer] : gp.boundary_in[c]) {
+                int wire = recvInt(ios[c]);
+                if (wire != expected_wire) throw std::runtime_error("Unexpected boundary wire");
+                receive_boundary(ios[c], c, wire);
             }
-
-            sendInt(ios[c], 1);
-            ios[c]->flush();
-        } else if (c > 0) {
-            sendInt(ios[c], 0);
-            ios[c]->flush();
-            sendInt(ios[c], 1);
-            ios[c]->flush();
         }
+        sendInt(ios[c], 1);
+        ios[c]->flush();
 
         // ── Receive garbled tables ───────────────────────────────────────
         int n_tables = recvInt(ios[c]);
@@ -374,9 +386,12 @@ static RunResult runProtocol(const Args& args) {
 
         // ── Receive boundary producer data ───────────────────────────────
         int n_prod = recvInt(ios[c]);
-        for (int i = 0; i < n_prod; i++) {
-            BoundaryHashInfo bh = recvBoundaryHashInfo(ios[c]);
-            boundary_hash_store[bh.wire_id] = bh;
+        if (n_prod != (int)gp.boundary_out[c].size()) throw std::runtime_error("Boundary producer count mismatch");
+        for (const auto& [expected_wire, expected_consumer] : gp.boundary_out[c]) {
+            int wire = recvInt(ios[c]);
+            int consumer = recvInt(ios[c]);
+            if (wire != expected_wire || consumer != expected_consumer) throw std::runtime_error("Unexpected boundary destination");
+            receive_boundary(ios[c], consumer, wire);
         }
 
         // ── Receive output W0 labels ─────────────────────────────────────
@@ -405,6 +420,8 @@ static RunResult runProtocol(const Args& args) {
         // ── Receive client metrics ───────────────────────────────────────
         all_metrics[c] = recvClientMetrics(ios[c]);
     }
+
+    if (!boundary_encs.empty() || boundary_transfers.size() != (size_t)totalBoundaryPins(gp)) throw std::runtime_error("Incomplete boundary encodings");
 
     if (args.verbose)
         std::cout << "[Evaluator] All client data received. Decoding + evaluating..." << std::endl;
@@ -438,8 +455,9 @@ static RunResult runProtocol(const Args& args) {
     }
 
     // ── Phase 3: Evaluate ───────────────────────────────────────────────────
-    double eval_us = 0;
+    double eval_us = boundary_decode_us;
     std::vector<emp::block> eva_wires(circ->num_wire);
+    std::vector<emp::block> source_wires(circ->num_wire);
     {
         ScopedTimer et(eval_us);
         emp::MemIO mem_io;
@@ -457,15 +475,13 @@ static RunResult runProtocol(const Args& args) {
         emp::CircuitExecution::circ_exec = eva;
 
         for (int w = 0; w < total_inputs; w++)
-            eva_wires[w] = eva_inputs[w];
+            source_wires[w] = eva_wires[w] = eva_inputs[w];
 
         for (int c = 0; c < N; c++) {
-            if (c > 0) {
-                for (auto& [wire_id, producer] : gp.boundary_in[c]) {
-                    auto it = boundary_transfers.find({c, wire_id});
-                    if (it != boundary_transfers.end())
-                        eva_wires[wire_id] = applyBoundaryARE(eva_wires[wire_id], it->second);
-                }
+            eva->mitccrh.renew_ks(0);
+            for (int w = gp.inp_start[c]; w < gp.inp_end[c]; w++) eva_wires[w] = source_wires[w];
+            for (auto& [wire_id, producer] : gp.boundary_in[c]) {
+                eva_wires[wire_id] = applyBoundaryARE(source_wires[wire_id], boundary_transfers.at({c, wire_id}));
             }
             for (int g = gp.gate_start[c]; g < gp.gate_end[c]; g++) {
                 int in0 = circ->gates[4*g+0];
@@ -478,6 +494,7 @@ static RunResult runProtocol(const Args& args) {
                     eva_wires[out_w] = emp::CircuitExecution::circ_exec->and_gate(eva_wires[in0], eva_wires[in1]);
                 else if (type == NOT_GATE)
                     eva_wires[out_w] = emp::CircuitExecution::circ_exec->not_gate(eva_wires[in0]);
+                source_wires[out_w] = eva_wires[out_w];
             }
         }
         delete eva;
@@ -489,7 +506,7 @@ static RunResult runProtocol(const Args& args) {
         int w = gp.out_base + i;
         auto it = output_W0.find(w);
         assert(it != output_W0.end() && "Missing output W0 label");
-        output_bits[i] = (int)emp::getLSB(eva_wires[w]) ^ (int)emp::getLSB(it->second);
+        output_bits[i] = (int)emp::getLSB(source_wires[w]) ^ (int)emp::getLSB(it->second);
     }
 
     if (args.verbose) {

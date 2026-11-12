@@ -22,17 +22,14 @@ struct ClientMetrics {
     size_t ot_are_bytes         = 0;
     size_t boundary_are_bytes   = 0;
     int share_count = 0;
-    double share_time_us = 0; // Included in ot_are_time_us.
+    double share_time_us = 0; // Included in input and boundary times.
     size_t share_bytes = 0;
     size_t share_messages = 0;
     // Actual bytes pushed over the socket (sender-side, from emp::NetIO::counter).
-    // The three fields above are the analytic ARE encoding sizes; these four are
-    // the real wire transfer (PXT-ARE diff is sent, but the encodings themselves
-    // are decoded locally and never travel, so wire_boundary_bytes is much
-    // smaller than boundary_are_bytes).
+    // Raw ARE sizes above; serialized input and boundary shares below.
     size_t wire_garble_bytes    = 0;  // garbled-table ciphertexts on the wire
     size_t wire_ot_are_bytes    = 0;  // input OT-ARE encodings (these DO travel)
-    size_t wire_boundary_bytes  = 0;  // BoundaryResultMsg + BoundaryHashInfo
+    size_t wire_boundary_bytes  = 0;  // boundary shares and transfer identifiers
     size_t wire_total_bytes     = 0;  // io->counter at end of session
 
     double total_time_us() const {

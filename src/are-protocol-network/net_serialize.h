@@ -145,12 +145,12 @@ inline GlobalPartition computePartition(emp::BristolFormat* circ, int num_client
     // Boundary wires
     gp.boundary_in.resize(num_clients);
     gp.boundary_out.resize(num_clients);
-    for (int c = 1; c < num_clients; c++) {
+    for (int c = 0; c < num_clients; c++) {
         std::set<int> need;
         for (int g = gp.gate_start[c]; g < gp.gate_end[c]; g++) {
             int in0 = circ->gates[4*g+0], in1 = circ->gates[4*g+1];
-            if (gp.wire_partition[in0] >= 0 && gp.wire_partition[in0] < c) need.insert(in0);
-            if (gp.wire_partition[in1] >= 0 && gp.wire_partition[in1] < c) need.insert(in1);
+            if (gp.wire_partition[in0] >= 0 && gp.wire_partition[in0] != c) need.insert(in0);
+            if (gp.wire_partition[in1] >= 0 && gp.wire_partition[in1] != c) need.insert(in1);
         }
         for (int w : need) {
             int producer = gp.wire_partition[w];
@@ -224,12 +224,12 @@ inline void fillGlobalPartitionFromCuts(GlobalPartition& gp, emp::BristolFormat*
 
     gp.boundary_in.assign(num_clients, {});
     gp.boundary_out.assign(num_clients, {});
-    for (int c = 1; c < num_clients; c++) {
+    for (int c = 0; c < num_clients; c++) {
         std::set<int> need;
         for (int g = gate_start[c]; g < gate_end[c]; g++) {
             int in0 = circ->gates[4*g+0], in1 = circ->gates[4*g+1];
-            if (gp.wire_partition[in0] >= 0 && gp.wire_partition[in0] < c) need.insert(in0);
-            if (gp.wire_partition[in1] >= 0 && gp.wire_partition[in1] < c) need.insert(in1);
+            if (gp.wire_partition[in0] >= 0 && gp.wire_partition[in0] != c) need.insert(in0);
+            if (gp.wire_partition[in1] >= 0 && gp.wire_partition[in1] != c) need.insert(in1);
         }
         for (int w : need) {
             int producer = gp.wire_partition[w];
@@ -689,16 +689,16 @@ inline ReceiverEncoding recvReceiverEncoding(emp::NetIO* io) {
 }
 
 static constexpr size_t INPUT_SHARE_BYTES = sizeof(uint64_t) + 4 * ENCODED_DATA_SIZE + sizeof(uint32_t);
+static constexpr size_t BOUNDARY_SHARE_BYTES = sizeof(uint64_t) + 2 * ENCODED_DATA_SIZE + sizeof(uint32_t);
 
 template<typename IO>
-inline void sendInputEncodingShares(IO* io, const SenderEncoding& se, const ReceiverEncoding& re, uint64_t tag, int shares, const PublicParams& pp) {
+inline void sendEncodingShares(IO* io, const EncodedData* values, size_t count, uint32_t mask, uint64_t tag, int shares, const PublicParams& pp) {
     if (shares < 1) throw std::invalid_argument("Share count must be positive");
-    EncodedData remaining[4] = {se.enc1, se.enc2, re.enc1, re.enc2};
-    uint32_t remaining_c = se.c;
+    std::vector<EncodedData> remaining(values, values + count);
+    std::vector<char> buffer(sizeof(tag) + count * ENCODED_DATA_SIZE + sizeof(mask));
     emp::PRG prg;
     for (int s = 0; s < shares; s++) {
-        char buffer[INPUT_SHARE_BYTES];
-        memcpy(buffer, &tag, sizeof(tag));
+        memcpy(buffer.data(), &tag, sizeof(tag));
         size_t offset = sizeof(tag);
         for (auto& value : remaining) {
             EncodedData share = value;
@@ -713,51 +713,89 @@ inline void sendInputEncodingShares(IO* io, const SenderEncoding& se, const Rece
                 GT::inv(inverse, share.part3);
                 GT::mul(value.part3, value.part3, inverse);
             }
-            offset += share.part1.serialize(buffer + offset, G1_SERIAL_SIZE);
-            offset += share.part2.serialize(buffer + offset, G2_SERIAL_SIZE);
-            offset += share.part3.serialize(buffer + offset, GT_SERIAL_SIZE);
+            offset += share.part1.serialize(buffer.data() + offset, G1_SERIAL_SIZE);
+            offset += share.part2.serialize(buffer.data() + offset, G2_SERIAL_SIZE);
+            offset += share.part3.serialize(buffer.data() + offset, GT_SERIAL_SIZE);
         }
-        uint32_t c = remaining_c;
-        if (s + 1 < shares) { prg.random_data(&c, sizeof(c)); remaining_c ^= c; }
-        if (offset != INPUT_SHARE_BYTES - sizeof(c)) throw std::runtime_error("Invalid share size");
-        memcpy(buffer + offset, &c, sizeof(c));
-        io->send_data(buffer, sizeof(buffer));
+        uint32_t part = mask;
+        if (s + 1 < shares) { prg.random_data(&part, sizeof(part)); mask ^= part; }
+        if (offset != buffer.size() - sizeof(part)) throw std::runtime_error("Invalid share size");
+        memcpy(buffer.data() + offset, &part, sizeof(part));
+        io->send_data(buffer.data(), buffer.size());
     }
 }
 
 template<typename IO>
-inline void recvInputEncodingShares(IO* io, SenderEncoding& se, ReceiverEncoding& re, uint64_t expected_tag, int shares) {
+inline uint32_t recvEncodingShares(IO* io, EncodedData* sum, size_t count, uint64_t expected_tag, int shares) {
     if (shares < 1) throw std::invalid_argument("Share count must be positive");
-    EncodedData sum[4];
-    for (auto& value : sum) { value.part1.clear(); value.part2.clear(); value.part3.setOne(); }
-    uint32_t c = 0;
+    uint32_t mask = 0;
+    std::vector<char> buffer(sizeof(uint64_t) + count * ENCODED_DATA_SIZE + sizeof(mask));
     for (int s = 0; s < shares; s++) {
-        char buffer[INPUT_SHARE_BYTES];
-        io->recv_data(buffer, sizeof(buffer));
+        io->recv_data(buffer.data(), buffer.size());
         uint64_t tag;
-        memcpy(&tag, buffer, sizeof(tag));
-        if (tag != expected_tag) throw std::runtime_error("Unexpected input share tag");
+        memcpy(&tag, buffer.data(), sizeof(tag));
+        if (tag != expected_tag) throw std::runtime_error("Unexpected encoding share tag");
         size_t offset = sizeof(tag);
-        for (auto& value : sum) {
+        for (size_t i = 0; i < count; i++) {
+            auto& value = sum[i];
             EncodedData share;
-            if (share.part1.deserialize(buffer + offset, G1_SERIAL_SIZE) != G1_SERIAL_SIZE) throw std::runtime_error("Invalid G1 share");
+            if (share.part1.deserialize(buffer.data() + offset, G1_SERIAL_SIZE) != G1_SERIAL_SIZE) throw std::runtime_error("Invalid G1 share");
             offset += G1_SERIAL_SIZE;
-            if (share.part2.deserialize(buffer + offset, G2_SERIAL_SIZE) != G2_SERIAL_SIZE) throw std::runtime_error("Invalid G2 share");
+            if (share.part2.deserialize(buffer.data() + offset, G2_SERIAL_SIZE) != G2_SERIAL_SIZE) throw std::runtime_error("Invalid G2 share");
             offset += G2_SERIAL_SIZE;
-            if (share.part3.deserialize(buffer + offset, GT_SERIAL_SIZE) != GT_SERIAL_SIZE || !isValidGT(share.part3)) throw std::runtime_error("Invalid GT share");
+            if (share.part3.deserialize(buffer.data() + offset, GT_SERIAL_SIZE) != GT_SERIAL_SIZE || !isValidGT(share.part3)) throw std::runtime_error("Invalid GT share");
             offset += GT_SERIAL_SIZE;
             G1::add(value.part1, value.part1, share.part1);
             G2::add(value.part2, value.part2, share.part2);
             GT::mul(value.part3, value.part3, share.part3);
         }
-        uint32_t share_c;
-        memcpy(&share_c, buffer + offset, sizeof(share_c));
-        c ^= share_c;
+        uint32_t part;
+        memcpy(&part, buffer.data() + offset, sizeof(part));
+        mask ^= part;
     }
+    return mask;
+}
+
+template<typename IO>
+inline void sendInputEncodingShares(IO* io, const SenderEncoding& se, const ReceiverEncoding& re, uint64_t tag, int shares, const PublicParams& pp) {
+    EncodedData values[4] = {se.enc1, se.enc2, re.enc1, re.enc2};
+    sendEncodingShares(io, values, 4, se.c, tag, shares, pp);
+}
+
+template<typename IO>
+inline void recvInputEncodingShares(IO* io, SenderEncoding& se, ReceiverEncoding& re, uint64_t tag, int shares) {
+    EncodedData sum[4];
+    for (auto& value : sum) { value.part1.clear(); value.part2.clear(); value.part3.setOne(); }
+    uint32_t c = recvEncodingShares(io, sum, 4, tag, shares);
     if (c > 1) throw std::runtime_error("Invalid reconstructed sender bit");
     se = {sum[0], sum[1], (int)c};
     re = {sum[2], sum[3]};
 }
+
+struct BoundaryEncodingSum {
+    EncodedData enc[2];
+    uint32_t mask = 0;
+    BoundaryEncodingSum() { for (auto& value : enc) { value.part1.clear(); value.part2.clear(); value.part3.setOne(); } }
+};
+
+inline uint64_t boundaryShareTag(int consumer, int wire, int byte, int num_wires) { return ((uint64_t)consumer * num_wires + wire) * 16 + byte; }
+inline uint32_t packBoundaryMask(const std::vector<int>& bits) {
+    uint32_t mask = 0;
+    for (size_t i = 0; i < bits.size(); i++) mask |= (uint32_t)bits[i] << i;
+    return mask;
+}
+
+template<typename IO>
+inline void sendBoundaryEncodingShares(IO* io, const EncodedData& first, const EncodedData& second, uint32_t mask, uint64_t tag, int shares, const PublicParams& pp, ClientMetrics& metrics) {
+    ScopedTimer timer(metrics.share_time_us);
+    EncodedData values[2] = {first, second};
+    sendEncodingShares(io, values, 2, mask, tag, shares, pp);
+    metrics.share_messages += shares;
+    metrics.share_bytes += shares * BOUNDARY_SHARE_BYTES;
+}
+
+template<typename IO>
+inline void recvBoundaryEncodingShares(IO* io, BoundaryEncodingSum& sum, uint64_t tag, int shares) { sum.mask ^= recvEncodingShares(io, sum.enc, 2, tag, shares); }
 
 // ── PartitionInfo send/recv ─────────────────────────────────────────────────
 
